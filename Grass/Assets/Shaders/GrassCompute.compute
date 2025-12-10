@@ -1,0 +1,95 @@
+// Compute Shader for calculating grass blade positions
+// Generates 1M grass positions in a grid pattern with slight randomization
+
+#pragma kernel CSMain
+
+// Grass data structure matching the one in C# and render shader
+struct GrassData
+{
+    float3 position;
+    float height;
+    float2 facing;      // Direction the grass blade faces (for rotation)
+    float windPhase;    // Phase offset for wind animation
+};
+
+// Output buffer for grass positions
+RWStructuredBuffer<GrassData> grassDataBuffer;
+
+// Parameters
+float _TerrainSize;     // Size of the terrain (grass spawns in _TerrainSize x _TerrainSize area)
+float _MinHeight;       // Minimum grass height
+float _MaxHeight;       // Maximum grass height
+float _Time;            // Time for potential animation
+uint _GrassCount;       // Total number of grass blades
+uint _GrassPerRow;      // Number of grass blades per row (sqrt of total)
+
+// Simple hash function for pseudo-random numbers
+float hash(float2 p)
+{
+    float h = dot(p, float2(127.1, 311.7));
+    return frac(sin(h) * 43758.5453123);
+}
+
+// 2D noise for more natural distribution
+float noise2D(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+    
+    float a = hash(i);
+    float b = hash(i + float2(1.0, 0.0));
+    float c = hash(i + float2(0.0, 1.0));
+    float d = hash(i + float2(1.0, 1.0));
+    
+    float2 u = f * f * (3.0 - 2.0 * f);
+    
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
+[numthreads(256, 1, 1)]
+void CSMain(uint3 id : SV_DispatchThreadID)
+{
+    // Bounds check
+    if (id.x >= _GrassCount)
+        return;
+    
+    // Calculate grid position
+    uint row = id.x / _GrassPerRow;
+    uint col = id.x % _GrassPerRow;
+    
+    // Base position in grid
+    float cellSize = _TerrainSize / _GrassPerRow;
+    float2 basePos = float2(col * cellSize, row * cellSize);
+    
+    // Add randomization within cell
+    float2 seed = basePos + float2(id.x * 0.1, id.x * 0.2);
+    float randX = hash(seed) - 0.5;
+    float randZ = hash(seed + float2(17.3, 31.7)) - 0.5;
+    
+    // Apply random offset (within cell bounds)
+    float2 offset = float2(randX, randZ) * cellSize * 0.9;
+    float2 finalPos2D = basePos + offset;
+    
+    // Center the grass field around origin
+    finalPos2D -= _TerrainSize * 0.5;
+    
+    // Create grass data
+    GrassData grass;
+    
+    // Position (Y will be adjusted by terrain height in a more advanced version)
+    grass.position = float3(finalPos2D.x, 0.0, finalPos2D.y);
+    
+    // Random height
+    float heightRand = hash(seed + float2(53.7, 97.3));
+    grass.height = lerp(_MinHeight, _MaxHeight, heightRand);
+    
+    // Random facing direction
+    float facingAngle = hash(seed + float2(73.1, 41.9)) * 6.28318; // 2*PI
+    grass.facing = float2(cos(facingAngle), sin(facingAngle));
+    
+    // Random wind phase
+    grass.windPhase = hash(seed + float2(11.3, 29.7)) * 6.28318;
+    
+    // Write to buffer
+    grassDataBuffer[id.x] = grass;
+}
