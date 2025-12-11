@@ -22,6 +22,9 @@ Shader "Custom/GrassShader"
         _TranslucencyPower ("Translucency Power", Range(1,10)) = 4.0
         _TranslucencyScale ("Translucency Scale", Range(0,5)) = 1.0
         _ShadowStrength ("Shadow Strength", Range(0,1)) = 1.0
+        
+        [Header(Normal Rounding)]
+        _NormalRotationAngle ("Normal Rotation Angle", Range(0, 1)) = 0.3
     }
     
     SubShader
@@ -66,13 +69,39 @@ Shader "Custom/GrassShader"
             float _TranslucencyPower;
             float _TranslucencyScale;
             float _ShadowStrength;
+            float _NormalRotationAngle;
         CBUFFER_END
+        
+        // Rotation matrix around Y axis
+        float3 RotateAroundYAxis(float3 v, float angle)
+        {
+            float s = sin(angle);
+            float c = cos(angle);
+            return float3(
+                v.x * c - v.z * s,
+                v.y,
+                v.x * s + v.z * c
+            );
+        }
+        
+        // Rotation around an arbitrary axis (Rodrigues' rotation formula)
+        float3 RotateAroundAxis(float3 v, float3 axis, float angle)
+        {
+            float s = sin(angle);
+            float c = cos(angle);
+            return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
+        }
         
         #if defined(UNITY_PROCEDURAL_INSTANCING_ENABLED)
             StructuredBuffer<GrassData> _GrassDataBuffer;
         #endif
 
         // Helper Functions
+        float easeOut(float t, float power)
+        {
+            return 1.0 - pow(abs(1.0 - t), power);
+        }
+
         float3 Bezier(float3 p0, float3 p1, float3 p2, float3 p3, float t)
         {
             float u = 1.0 - t;
@@ -127,10 +156,17 @@ Shader "Custom/GrassShader"
             // 3. Bezier Control Points
             float3 leanVector = windDirOS * currentWindImpact;
             
+            // Tip Flapping:
+            // 1. Tip bends more aggressively with strong wind (quadratic response)
+            // 2. Extra high-frequency flutter at the tip when wind is strong
+            float tipBendFactor = 2.0 + (windSample * 1.0); 
+            float tipFlutter = sin(_Time.y * 25.0 + grass.windPhase * 20.0) * windSample * _WindFlutterStrength;
+            float3 tipFlutterVec = windDirOS * tipFlutter;
+
             float3 p0 = float3(0, 0, 0);
             float3 p1 = float3(0, height * 0.33, 0);
             float3 p2 = float3(0, height * 0.66, 0) + leanVector;
-            float3 p3 = float3(0, height, 0) + leanVector * 1.5;
+            float3 p3 = float3(0, height, 0) + (leanVector * tipBendFactor) + tipFlutterVec;
             
             // 4. Calculate Position
             float3 spinePos = Bezier(p0, p1, p2, p3, t);
@@ -186,6 +222,9 @@ Shader "Custom/GrassShader"
                 float3 positionWS : TEXCOORD0;
                 float3 normalWS : TEXCOORD1;
                 float heightGradient : TEXCOORD2;
+                float3 rotatedNormal1 : TEXCOORD3;
+                float3 rotatedNormal2 : TEXCOORD4;
+                float widthPercent : TEXCOORD5;
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
             
@@ -230,9 +269,52 @@ Shader "Custom/GrassShader"
                 #endif
                 
                 output.positionWS = TransformObjectToWorld(posOS);
-                output.positionCS = TransformWorldToHClip(output.positionWS);
+                
+                // View Space Adjustment (Thicken grass when viewed from side)
+                float3 positionVS = TransformWorldToView(output.positionWS);
+                
+                // Calculate face normal in World Space (blade faces Z in object space)
+                float3 faceNormalWS = TransformObjectToWorldNormal(float3(0,0,1));
+                float3 viewDirWS = GetWorldSpaceViewDir(output.positionWS);
+                
+                // Calculate how much we are looking at the edge
+                float viewDotNormal = saturate(dot(normalize(faceNormalWS.xz), normalize(viewDirWS.xz)));
+                
+                // Calculate thicken factor
+                float viewSpaceThickenFactor = easeOut(1.0 - viewDotNormal, 4.0);
+                viewSpaceThickenFactor *= smoothstep(0.0, 0.2, viewDotNormal);
+                
+                // Apply thickening in View Space X direction
+                float xDirection = (input.uv.x - 0.5) * 2.0;
+                positionVS.x += viewSpaceThickenFactor * xDirection * _BladeWidth * 0.5;
+                
+                output.positionCS = TransformWViewToHClip(positionVS);
                 output.normalWS = TransformObjectToWorldNormal(normalOS);
                 output.heightGradient = saturate(input.uv.y);
+                
+                // Calculate rotated normals for fake rounding
+                // The blade is a flat quad facing forward (normal ~ 0,0,1)
+                // We rotate the normal around the blade's tangent (up direction) to simulate a curved surface
+                // This makes the left edge normal point left-forward and right edge normal point right-forward
+                float rotAngle = HALF_PI * _NormalRotationAngle; // HALF_PI gives up to 90 degree rotation
+                
+                // For a grass blade, the tangent runs up the blade
+                // In object space after CalculateGrassVertex, the blade is mostly vertical
+                // We rotate around the tangent/up direction
+                float3 tangentAxis = normalize(float3(0, 1, 0));
+                
+                // Create the two rotated normals
+                // Left edge: normal rotated towards -X
+                // Right edge: normal rotated towards +X  
+                float3 rotatedNormal1OS = RotateAroundAxis(normalOS, tangentAxis, -rotAngle);
+                float3 rotatedNormal2OS = RotateAroundAxis(normalOS, tangentAxis, rotAngle);
+                
+                // Transform to world space
+                output.rotatedNormal1 = TransformObjectToWorldNormal(rotatedNormal1OS);
+                output.rotatedNormal2 = TransformObjectToWorldNormal(rotatedNormal2OS);
+                
+                // Width percent (0 = left edge, 1 = right edge)
+                output.widthPercent = saturate(input.uv.x);
                 
                 return output;
             }
@@ -249,7 +331,15 @@ Shader "Custom/GrassShader"
                 color *= heightAO;
                 
                 // 3. Lighting Data
-                float3 normalWS = normalize(input.normalWS);
+                // Blend between the two rotated normals based on width position
+                // This creates a fake rounded/curved look on a flat quad
+                float3 blendedNormal = lerp(
+                    normalize(input.rotatedNormal1),
+                    normalize(input.rotatedNormal2),
+                    input.widthPercent
+                );
+                float3 normalWS = normalize(blendedNormal);
+                
                 Light mainLight = GetMainLight(TransformWorldToShadowCoord(input.positionWS));
                 float3 lightDir = mainLight.direction;
                 float3 viewDir = GetWorldSpaceViewDir(input.positionWS);

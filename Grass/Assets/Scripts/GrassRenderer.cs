@@ -17,6 +17,7 @@ public class GrassRenderer : MonoBehaviour
     [SerializeField] private float clumpStrength = 0.8f;
     [SerializeField] private float heightScale = 0.05f;
     [SerializeField] private float heightFactor = 0.5f;
+    [SerializeField, Range(0, 1)] private float angleVariation = 1.0f;
 
     [Header("References")]
     [SerializeField] private ComputeShader computeShader;
@@ -53,6 +54,12 @@ public class GrassRenderer : MonoBehaviour
     private uint threadGroupSize;
     private Plane[] cameraFrustumPlanes = new Plane[6];
     private float[] frustumPlaneFloats = new float[24]; // 6 planes * 4 floats
+    private bool needsUpdate = false;
+
+    private void OnValidate()
+    {
+        needsUpdate = true;
+    }
 
     private void Start()
     {
@@ -129,6 +136,7 @@ public class GrassRenderer : MonoBehaviour
         computeShader.SetFloat("_ClumpStrength", clumpStrength);
         computeShader.SetFloat("_HeightScale", heightScale);
         computeShader.SetFloat("_HeightFactor", heightFactor);
+        computeShader.SetFloat("_AngleVariation", angleVariation);
 
         // Calculate thread groups needed
         int threadGroups = Mathf.CeilToInt((float)grassCount / threadGroupSize);
@@ -144,6 +152,12 @@ public class GrassRenderer : MonoBehaviour
 
     private void Update()
     {
+        if (needsUpdate && sourceGrassBuffer != null)
+        {
+            needsUpdate = false;
+            DispatchComputeShader();
+        }
+
         if (sourceGrassBuffer == null || argsBuffer == null || culledGrassBuffer == null) return;
 
         // 1. Frustum Culling

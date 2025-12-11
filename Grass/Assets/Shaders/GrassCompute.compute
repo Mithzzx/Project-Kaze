@@ -35,6 +35,7 @@ float _ClumpScale;      // Scale of the noise for clumping (Frequency)
 float _ClumpStrength;   // How strongly grass is pushed into clumps
 float _HeightScale;     // Scale of the noise for height variation
 float _HeightFactor;    // Minimum height multiplier (0.0 = gaps, 1.0 = uniform)
+float _AngleVariation;  // Control the range of random rotation (0.0 = aligned, 1.0 = full random)
 
 // --- NOISE FUNCTIONS ---
 
@@ -144,8 +145,11 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     float randomHeight = lerp(_MinHeight, _MaxHeight, hash12(basePos * 1.23 + 45.6));
     grass.height = randomHeight * heightMultiplier;
     
-    // Random Rotation (0 to 2PI)
-    float facingAngle = hash12(basePos + 56.78) * 6.28318;
+    // Random Rotation (controlled by _AngleVariation)
+    // Map hash (0..1) to (-0.5..0.5), then scale by variation and 2PI
+    // If _AngleVariation is 1.0, range is -PI to +PI (full circle)
+    // If _AngleVariation is 0.0, angle is 0.0 (aligned)
+    float facingAngle = (hash12(basePos + 56.78) - 0.5) * _AngleVariation * 6.28318;
     grass.facing = float2(cos(facingAngle), sin(facingAngle));
     
     // Wind Phase
