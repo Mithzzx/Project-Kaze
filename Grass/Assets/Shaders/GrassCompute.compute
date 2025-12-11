@@ -11,6 +11,7 @@ struct GrassData
     float height;
     float2 facing;      // Direction the grass blade faces (for rotation)
     float windPhase;    // Phase offset for wind animation
+    float stiffness;    // Wind resistance (0.8-1.0), lower = more flexible
 };
 
 // Output buffer for grass positions
@@ -154,6 +155,9 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     
     // Wind Phase
     grass.windPhase = finalPos2D.x * 0.1 + finalPos2D.y * 0.1 + hash12(basePos + 78.9) * 0.5;
+    
+    // Stiffness - random value between 0.8 and 1.0 for wind resistance variation
+    grass.stiffness = 0.8 + hash12(basePos + 91.23) * 0.2;
     
     grassDataBuffer[id.x] = grass;
 }

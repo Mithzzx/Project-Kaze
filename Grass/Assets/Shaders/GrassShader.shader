@@ -2,12 +2,19 @@ Shader "Custom/GrassShader"
 {
     Properties
     {
-        _BaseColor ("Base Color", Color) = (0.1, 0.5, 0.1, 1)
-        _TipColor ("Tip Color", Color) = (0.4, 0.8, 0.2, 1)
+        [Header(Color)]
+        _RootColor ("Root Color", Color) = (0.04, 0.08, 0.02, 1)
+        _MidColor ("Mid Color", Color) = (0.15, 0.35, 0.08, 1)
+        _TipColor ("Tip Color", Color) = (0.45, 0.55, 0.15, 1)
+        _DryColor ("Dry/Dead Color", Color) = (0.4, 0.35, 0.15, 1)
+        _DryAmount ("Dryness Amount", Range(0, 1)) = 0.15
+        _ColorNoiseScale ("Color Noise Scale", Float) = 0.3
+        _ColorNoiseStrength ("Color Noise Strength", Range(0, 1)) = 0.2
         
         [Header(Blade Shape)]
         _BladeWidth ("Blade Width", Float) = 0.05
         _BladeHeight ("Blade Height Multiplier", Float) = 1.0
+        _BladeBend ("Blade Bend (Natural Curve)", Range(0, 1)) = 0.3
         
         [Header(Wind)]
         _WindMap ("Wind Noise Texture", 2D) = "white" {}
@@ -16,15 +23,16 @@ Shader "Custom/GrassShader"
         _WindGustStrength ("Gust Strength", Float) = 1.0
         _WindFlutterStrength ("Flutter Strength", Float) = 0.1
         
-        [Header(Lighting)]
-        _Translucency ("Translucency Strength", Range(0,1)) = 0.5
-        _TranslucencyDistortion ("Translucency Distortion", Range(0,1)) = 0.1
-        _TranslucencyPower ("Translucency Power", Range(1,10)) = 4.0
-        _TranslucencyScale ("Translucency Scale", Range(0,5)) = 1.0
-        _ShadowStrength ("Shadow Strength", Range(0,1)) = 1.0
-        
         [Header(Normal Rounding)]
-        _NormalRotationAngle ("Normal Rotation Angle", Range(0, 1)) = 0.3
+        _NormalRotationAngle ("Normal Rotation Angle", Range(0, 0.5)) = 0.3
+        
+        [Header(Lighting)]
+        _Translucency ("Translucency (SSS)", Range(0, 1)) = 0.6
+        _TranslucencyPower ("Translucency Power", Range(1, 8)) = 3.0
+        _AmbientOcclusionStrength ("AO Strength", Range(0, 1)) = 0.7
+        _ShadowSoftness ("Shadow Softness", Range(0, 1)) = 0.3
+        _SpecularStrength ("Specular Strength", Range(0, 1)) = 0.15
+        _SpecularPower ("Specular Power", Range(8, 128)) = 32
     }
     
     SubShader
@@ -48,6 +56,7 @@ Shader "Custom/GrassShader"
             float height;
             float2 facing;
             float windPhase;
+            float stiffness;
         };
         
         // Variables
@@ -55,25 +64,42 @@ Shader "Custom/GrassShader"
         SAMPLER(sampler_WindMap);
 
         CBUFFER_START(UnityPerMaterial)
-            float4 _BaseColor;
+            float4 _RootColor;
+            float4 _MidColor;
             float4 _TipColor;
+            float4 _DryColor;
             float4 _WindMap_ST;
             float4 _WindVelocity;
+            float _DryAmount;
+            float _ColorNoiseScale;
+            float _ColorNoiseStrength;
             float _BladeWidth;
             float _BladeHeight;
+            float _BladeBend;
             float _WindFrequency;
             float _WindGustStrength;
             float _WindFlutterStrength;
-            float _Translucency;
-            float _TranslucencyDistortion;
-            float _TranslucencyPower;
-            float _TranslucencyScale;
-            float _ShadowStrength;
             float _NormalRotationAngle;
+            float _Translucency;
+            float _TranslucencyPower;
+            float _AmbientOcclusionStrength;
+            float _ShadowSoftness;
+            float _SpecularStrength;
+            float _SpecularPower;
         CBUFFER_END
         
-        // Rotation matrix around Y axis
-        float3 RotateAroundYAxis(float3 v, float angle)
+        #if defined(UNITY_PROCEDURAL_INSTANCING_ENABLED)
+            StructuredBuffer<GrassData> _GrassDataBuffer;
+        #endif
+
+        // Helper Functions
+        float easeOut(float t, float power)
+        {
+            return 1.0 - pow(abs(1.0 - t), power);
+        }
+        
+        // Rotate vector around Y axis
+        float3 RotateAroundY(float3 v, float angle)
         {
             float s = sin(angle);
             float c = cos(angle);
@@ -84,22 +110,12 @@ Shader "Custom/GrassShader"
             );
         }
         
-        // Rotation around an arbitrary axis (Rodrigues' rotation formula)
-        float3 RotateAroundAxis(float3 v, float3 axis, float angle)
+        // Simple hash for color variation
+        float Hash21(float2 p)
         {
-            float s = sin(angle);
-            float c = cos(angle);
-            return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
-        }
-        
-        #if defined(UNITY_PROCEDURAL_INSTANCING_ENABLED)
-            StructuredBuffer<GrassData> _GrassDataBuffer;
-        #endif
-
-        // Helper Functions
-        float easeOut(float t, float power)
-        {
-            return 1.0 - pow(abs(1.0 - t), power);
+            p = frac(p * float2(123.34, 456.21));
+            p += dot(p, p + 45.32);
+            return frac(p.x * p.y);
         }
 
         float3 Bezier(float3 p0, float3 p1, float3 p2, float3 p3, float t)
@@ -137,8 +153,8 @@ Shader "Custom/GrassShader"
             // Micro Wind (Flutter)
             float flutter = sin(_Time.y * 15.0 + grass.windPhase * 10.0) * _WindFlutterStrength;
             
-            // Combine
-            float currentWindImpact = (windSample * _WindGustStrength) + flutter;
+            // Combine and apply stiffness (lower stiffness = more wind effect)
+            float currentWindImpact = ((windSample * _WindGustStrength) + flutter) * (2.0 - grass.stiffness);
             
             // Wind Direction (Object Space)
             float3 windDirWS = normalize(float3(_WindVelocity.x, 0, _WindVelocity.y));
@@ -163,10 +179,22 @@ Shader "Custom/GrassShader"
             float tipFlutter = sin(_Time.y * 25.0 + grass.windPhase * 20.0) * windSample * _WindFlutterStrength;
             float3 tipFlutterVec = windDirOS * tipFlutter;
 
+            // Natural bend - grass bends in its facing direction for organic look
+            // The bend increases along the height of the blade (quadratic curve)
+            float3 naturalBendDir = float3(0, 0, 1); // Bend forward in object space (along facing)
+            float bendAmount = _BladeBend * height;
+            
             float3 p0 = float3(0, 0, 0);
-            float3 p1 = float3(0, height * 0.33, 0);
-            float3 p2 = float3(0, height * 0.66, 0) + leanVector;
-            float3 p3 = float3(0, height, 0) + (leanVector * tipBendFactor) + tipFlutterVec;
+            float3 p1 = float3(0, height * 0.33, 0) + naturalBendDir * bendAmount * 0.1;
+            
+            // Calculate target positions for p2 and p3 with wind applied
+            float3 p2_target = float3(0, height * 0.66, 0) + leanVector + naturalBendDir * bendAmount * 0.4;
+            float3 p3_target = float3(0, height, 0) + (leanVector * tipBendFactor) + tipFlutterVec + naturalBendDir * bendAmount;
+
+            // Length preservation: Constrain control points to their respective heights
+            // This ensures the blade bends (rotates) rather than shearing (stretching)
+            float3 p2 = normalize(p2_target) * (height * 0.66);
+            float3 p3 = normalize(p3_target) * height;
             
             // 4. Calculate Position
             float3 spinePos = Bezier(p0, p1, p2, p3, t);
@@ -183,6 +211,33 @@ Shader "Custom/GrassShader"
             // 6. Recalculate Normal
             float3 tangent = normalize(BezierTangent(p0, p1, p2, p3, t));
             normalOS = normalize(cross(float3(1, 0, 0), tangent));
+        }
+        
+        // Shared setup function for procedural instancing (used by all passes)
+        void setup()
+        {
+            #if defined(UNITY_PROCEDURAL_INSTANCING_ENABLED)
+                GrassData grass = _GrassDataBuffer[unity_InstanceID];
+                
+                float2 facing = grass.facing;
+                float3 right = float3(facing.y, 0, -facing.x);
+                float3 up = float3(0, 1, 0);
+                float3 forward = float3(facing.x, 0, facing.y);
+                
+                unity_ObjectToWorld = float4x4(
+                    right.x, up.x, forward.x, grass.position.x,
+                    right.y, up.y, forward.y, grass.position.y,
+                    right.z, up.z, forward.z, grass.position.z,
+                    0, 0, 0, 1
+                );
+                
+                unity_WorldToObject = float4x4(
+                    right.x, right.y, right.z, -dot(right, grass.position),
+                    up.x, up.y, up.z, -dot(up, grass.position),
+                    forward.x, forward.y, forward.z, -dot(forward, grass.position),
+                    0, 0, 0, 1
+                );
+            #endif
         }
         ENDHLSL
         // --- SHARED CODE END ---
@@ -201,9 +256,11 @@ Shader "Custom/GrassShader"
             #pragma vertex vert
             #pragma fragment frag
             
-            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE
-            #pragma multi_compile _ _ADDITIONAL_LIGHTS
+            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
+            #pragma multi_compile _ _ADDITIONAL_LIGHTS_VERTEX _ADDITIONAL_LIGHTS
+            #pragma multi_compile _ _ADDITIONAL_LIGHT_SHADOWS
             #pragma multi_compile _ _SHADOWS_SOFT
+            #pragma multi_compile _ _MIXED_LIGHTING_SUBTRACTIVE
             #pragma multi_compile_instancing
             #pragma instancing_options procedural:setup
             #pragma target 4.5
@@ -224,35 +281,13 @@ Shader "Custom/GrassShader"
                 float heightGradient : TEXCOORD2;
                 float3 rotatedNormal1 : TEXCOORD3;
                 float3 rotatedNormal2 : TEXCOORD4;
-                float widthPercent : TEXCOORD5;
+                float2 widthAndAO : TEXCOORD5;  // x = widthPercent, y = ao
+                float3 grassRootWS : TEXCOORD6;
+                #if defined(REQUIRES_VERTEX_SHADOW_COORD_INTERPOLATOR)
+                    float4 shadowCoord : TEXCOORD7;
+                #endif
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
-            
-            void setup()
-            {
-                #if defined(UNITY_PROCEDURAL_INSTANCING_ENABLED)
-                    GrassData grass = _GrassDataBuffer[unity_InstanceID];
-                    
-                    float2 facing = grass.facing;
-                    float3 right = float3(facing.y, 0, -facing.x);
-                    float3 up = float3(0, 1, 0);
-                    float3 forward = float3(facing.x, 0, facing.y);
-                    
-                    unity_ObjectToWorld = float4x4(
-                        right.x, up.x, forward.x, grass.position.x,
-                        right.y, up.y, forward.y, grass.position.y,
-                        right.z, up.z, forward.z, grass.position.z,
-                        0, 0, 0, 1
-                    );
-                    
-                    unity_WorldToObject = float4x4(
-                        right.x, right.y, right.z, -dot(right, grass.position),
-                        up.x, up.y, up.z, -dot(up, grass.position),
-                        forward.x, forward.y, forward.z, -dot(forward, grass.position),
-                        0, 0, 0, 1
-                    );
-                #endif
-            }
             
             Varyings vert(Attributes input)
             {
@@ -292,29 +327,29 @@ Shader "Custom/GrassShader"
                 output.normalWS = TransformObjectToWorldNormal(normalOS);
                 output.heightGradient = saturate(input.uv.y);
                 
-                // Calculate rotated normals for fake rounding
-                // The blade is a flat quad facing forward (normal ~ 0,0,1)
-                // We rotate the normal around the blade's tangent (up direction) to simulate a curved surface
-                // This makes the left edge normal point left-forward and right edge normal point right-forward
-                float rotAngle = HALF_PI * _NormalRotationAngle; // HALF_PI gives up to 90 degree rotation
+                // Fake normal rounding - rotate normal around Y axis to simulate curved blade
+                float rotAngle = PI * _NormalRotationAngle;
+                float3 rotatedNormal1OS = RotateAroundY(normalOS, rotAngle);   // Right edge normal
+                float3 rotatedNormal2OS = RotateAroundY(normalOS, -rotAngle);  // Left edge normal
                 
-                // For a grass blade, the tangent runs up the blade
-                // In object space after CalculateGrassVertex, the blade is mostly vertical
-                // We rotate around the tangent/up direction
-                float3 tangentAxis = normalize(float3(0, 1, 0));
-                
-                // Create the two rotated normals
-                // Left edge: normal rotated towards -X
-                // Right edge: normal rotated towards +X  
-                float3 rotatedNormal1OS = RotateAroundAxis(normalOS, tangentAxis, -rotAngle);
-                float3 rotatedNormal2OS = RotateAroundAxis(normalOS, tangentAxis, rotAngle);
-                
-                // Transform to world space
                 output.rotatedNormal1 = TransformObjectToWorldNormal(rotatedNormal1OS);
                 output.rotatedNormal2 = TransformObjectToWorldNormal(rotatedNormal2OS);
+                output.widthAndAO.x = saturate(input.uv.x);
                 
-                // Width percent (0 = left edge, 1 = right edge)
-                output.widthPercent = saturate(input.uv.x);
+                // Pre-calculate AO in vertex shader (height-based)
+                float heightT = saturate(input.uv.y);
+                output.widthAndAO.y = saturate(heightT * 2.0 + 0.3);
+                
+                #if defined(UNITY_PROCEDURAL_INSTANCING_ENABLED)
+                    output.grassRootWS = grass.position;
+                #else
+                    output.grassRootWS = float3(0, 0, 0);
+                #endif
+                
+                // Calculate shadow coordinates
+                #if defined(REQUIRES_VERTEX_SHADOW_COORD_INTERPOLATOR)
+                    output.shadowCoord = TransformWorldToShadowCoord(output.positionWS);
+                #endif
                 
                 return output;
             }
@@ -323,47 +358,83 @@ Shader "Custom/GrassShader"
             {
                 UNITY_SETUP_INSTANCE_ID(input);
                 
-                // 1. Base Color & Gradient
-                half3 color = lerp(_BaseColor.rgb, _TipColor.rgb, input.heightGradient);
+                float t = input.heightGradient;
+                float widthPercent = input.widthAndAO.x;
+                float ao = lerp(1.0, input.widthAndAO.y, _AmbientOcclusionStrength);
                 
-                // 2. Fake AO (Darken roots)
-                float heightAO = clamp(input.heightGradient + 0.2, 0, 1);
-                color *= heightAO;
+                // === ADVANCED COLOR CALCULATION ===
+                // 1. Three-point gradient (root -> mid -> tip)
+                half3 healthyColor;
+                if (t < 0.5)
+                {
+                    healthyColor = lerp(_RootColor.rgb, _MidColor.rgb, t * 2.0);
+                }
+                else
+                {
+                    healthyColor = lerp(_MidColor.rgb, _TipColor.rgb, (t - 0.5) * 2.0);
+                }
                 
-                // 3. Lighting Data
-                // Blend between the two rotated normals based on width position
-                // This creates a fake rounded/curved look on a flat quad
+                // 2. Per-blade color noise (using grass root position)
+                float2 noiseUV = input.grassRootWS.xz * _ColorNoiseScale;
+                float colorNoise = Hash21(noiseUV);
+                
+                // 3. Mix in dry/dead color based on noise and dryness amount
+                float dryMask = saturate(colorNoise * 2.0 - 1.0 + _DryAmount);
+                half3 baseColor = lerp(healthyColor, _DryColor.rgb, dryMask * _DryAmount);
+                
+                // 4. Add subtle hue variation
+                float hueShift = (colorNoise - 0.5) * _ColorNoiseStrength;
+                baseColor = lerp(baseColor, baseColor * float3(1.0 + hueShift, 1.0, 1.0 - hueShift * 0.5), _ColorNoiseStrength);
+                
+                // === NORMAL CALCULATION ===
                 float3 blendedNormal = lerp(
-                    normalize(input.rotatedNormal1),
-                    normalize(input.rotatedNormal2),
-                    input.widthPercent
+                    input.rotatedNormal1,
+                    input.rotatedNormal2,
+                    widthPercent
                 );
                 float3 normalWS = normalize(blendedNormal);
                 
-                Light mainLight = GetMainLight(TransformWorldToShadowCoord(input.positionWS));
+                // === SHADOW COORD ===
+                #if defined(REQUIRES_VERTEX_SHADOW_COORD_INTERPOLATOR)
+                    float4 shadowCoord = input.shadowCoord;
+                #elif defined(MAIN_LIGHT_CALCULATE_SHADOWS)
+                    float4 shadowCoord = TransformWorldToShadowCoord(input.positionWS);
+                #else
+                    float4 shadowCoord = float4(0, 0, 0, 0);
+                #endif
+                
+                // === LIGHTING ===
+                Light mainLight = GetMainLight(shadowCoord);
                 float3 lightDir = mainLight.direction;
-                float3 viewDir = GetWorldSpaceViewDir(input.positionWS);
+                float3 viewDir = normalize(GetWorldSpaceViewDir(input.positionWS));
                 
-                // Shadow attenuation with strength control
-                float shadowAtten = mainLight.shadowAttenuation;
-                shadowAtten = lerp(1.0, shadowAtten, _ShadowStrength);
-
-                // 4. Diffuse Lighting
-                float NdotL = saturate(dot(normalWS, lightDir));
-                float3 diffuse = color * mainLight.color * (NdotL * shadowAtten);
+                // Shadow attenuation
+                float shadow = mainLight.shadowAttenuation;
+                shadow = lerp(shadow, 1.0, _ShadowSoftness * (1.0 - t)); // Softer shadows at base
                 
-                // 5. Translucency (Backlight)
-                // Calculate translucency based on light direction relative to view and normal
-                // This allows light to pass through the blade when the sun is behind it
-                float3 transLightDir = lightDir + normalWS * _TranslucencyDistortion;
-                float transDot = pow(saturate(dot(viewDir, -transLightDir)), _TranslucencyPower);
-                float3 transLight = transDot * _TranslucencyScale * _Translucency * color * mainLight.color * shadowAtten;
+                // Diffuse (wrapped for softer look)
+                float NdotL = dot(normalWS, lightDir);
+                float wrappedDiffuse = saturate(NdotL * 0.5 + 0.5); // Half-Lambert
+                float3 diffuse = baseColor * mainLight.color * wrappedDiffuse * shadow;
                 
-                // 6. Ambient
-                float3 ambient = SampleSH(normalWS) * color;
+                // === SUBSURFACE SCATTERING / TRANSLUCENCY ===
+                float3 backLightDir = -lightDir + normalWS * 0.3;
+                float VdotBackLight = saturate(dot(viewDir, backLightDir));
+                float sss = pow(VdotBackLight, _TranslucencyPower) * _Translucency;
+                sss *= t;
+                float3 subsurface = sss * mainLight.color * baseColor * shadow;
                 
-                // Combine
-                float3 finalColor = diffuse + transLight + ambient;
+                // === SPECULAR ===
+                float3 halfDir = normalize(lightDir + viewDir);
+                float NdotH = saturate(dot(normalWS, halfDir));
+                float spec = pow(NdotH, _SpecularPower) * _SpecularStrength;
+                float3 specular = spec * mainLight.color * shadow * t;
+                
+                // === AMBIENT ===
+                float3 ambient = SampleSH(normalWS) * baseColor;
+                
+                // === FINAL COMBINE ===
+                float3 finalColor = (diffuse + subsurface + specular + ambient) * ao;
                 
                 return half4(finalColor, 1.0);
             }
@@ -387,13 +458,14 @@ Shader "Custom/GrassShader"
             #pragma vertex ShadowVert
             #pragma fragment ShadowFrag
             
+            #pragma multi_compile_vertex _ _CASTING_PUNCTUAL_LIGHT_SHADOW
             #pragma multi_compile_instancing
             #pragma instancing_options procedural:setup
             #pragma target 4.5
             
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Shadows.hlsl"
             
-            struct Attributes
+            struct ShadowAttributes
             {
                 float4 positionOS : POSITION;
                 float3 normalOS : NORMAL;
@@ -401,43 +473,18 @@ Shader "Custom/GrassShader"
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
             
-            struct Varyings
+            struct ShadowVaryings
             {
                 float4 positionCS : SV_POSITION;
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
             
             float3 _LightDirection;
+            float3 _LightPosition;
             
-            void setup()
+            ShadowVaryings ShadowVert(ShadowAttributes input)
             {
-                #if defined(UNITY_PROCEDURAL_INSTANCING_ENABLED)
-                    GrassData grass = _GrassDataBuffer[unity_InstanceID];
-                    
-                    float2 facing = grass.facing;
-                    float3 right = float3(facing.y, 0, -facing.x);
-                    float3 up = float3(0, 1, 0);
-                    float3 forward = float3(facing.x, 0, facing.y);
-                    
-                    unity_ObjectToWorld = float4x4(
-                        right.x, up.x, forward.x, grass.position.x,
-                        right.y, up.y, forward.y, grass.position.y,
-                        right.z, up.z, forward.z, grass.position.z,
-                        0, 0, 0, 1
-                    );
-                    
-                    unity_WorldToObject = float4x4(
-                        right.x, right.y, right.z, -dot(right, grass.position),
-                        up.x, up.y, up.z, -dot(up, grass.position),
-                        forward.x, forward.y, forward.z, -dot(forward, grass.position),
-                        0, 0, 0, 1
-                    );
-                #endif
-            }
-            
-            Varyings ShadowVert(Attributes input)
-            {
-                Varyings output = (Varyings)0;
+                ShadowVaryings output = (ShadowVaryings)0;
                 UNITY_SETUP_INSTANCE_ID(input);
                 UNITY_TRANSFER_INSTANCE_ID(input, output);
                 
@@ -452,12 +499,91 @@ Shader "Custom/GrassShader"
                 float3 positionWS = TransformObjectToWorld(posOS);
                 float3 normalWS = TransformObjectToWorldNormal(normalOS);
                 
-                output.positionCS = TransformWorldToHClip(ApplyShadowBias(positionWS, normalWS, _LightDirection));
+                #if _CASTING_PUNCTUAL_LIGHT_SHADOW
+                    float3 lightDirectionWS = normalize(_LightPosition - positionWS);
+                #else
+                    float3 lightDirectionWS = _LightDirection;
+                #endif
+
+                // Fix for missing shadows: Ensure light direction is valid
+                if (dot(lightDirectionWS, lightDirectionWS) < 0.0001)
+                {
+                    lightDirectionWS = GetMainLight().direction;
+                }
+                
+                output.positionCS = TransformWorldToHClip(ApplyShadowBias(positionWS, normalWS, lightDirectionWS));
+
+                #if UNITY_REVERSED_Z
+                    output.positionCS.z = min(output.positionCS.z, output.positionCS.w * UNITY_NEAR_CLIP_VALUE);
+                #else
+                    output.positionCS.z = max(output.positionCS.z, output.positionCS.w * UNITY_NEAR_CLIP_VALUE);
+                #endif
                 
                 return output;
             }
             
-            half4 ShadowFrag(Varyings input) : SV_Target
+            half4 ShadowFrag(ShadowVaryings input) : SV_Target
+            {
+                return 0;
+            }
+            ENDHLSL
+        }
+        
+        // ------------------------------------------------------------------
+        // Depth Only Pass (required for proper depth buffer)
+        // ------------------------------------------------------------------
+        Pass
+        {
+            Name "DepthOnly"
+            Tags { "LightMode" = "DepthOnly" }
+            
+            ZWrite On
+            ColorMask 0
+            Cull Off
+            
+            HLSLPROGRAM
+            #pragma vertex DepthVert
+            #pragma fragment DepthFrag
+            
+            #pragma multi_compile_instancing
+            #pragma instancing_options procedural:setup
+            #pragma target 4.5
+            
+            struct DepthAttributes
+            {
+                float4 positionOS : POSITION;
+                float3 normalOS : NORMAL;
+                float2 uv : TEXCOORD0;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
+            };
+            
+            struct DepthVaryings
+            {
+                float4 positionCS : SV_POSITION;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
+            };
+            
+            DepthVaryings DepthVert(DepthAttributes input)
+            {
+                DepthVaryings output = (DepthVaryings)0;
+                UNITY_SETUP_INSTANCE_ID(input);
+                UNITY_TRANSFER_INSTANCE_ID(input, output);
+                
+                float3 posOS = input.positionOS.xyz;
+                float3 normalOS = input.normalOS;
+                
+                #if defined(UNITY_PROCEDURAL_INSTANCING_ENABLED)
+                    GrassData grass = _GrassDataBuffer[unity_InstanceID];
+                    CalculateGrassVertex(posOS, normalOS, input.uv, grass);
+                #endif
+                
+                float3 positionWS = TransformObjectToWorld(posOS);
+                output.positionCS = TransformWorldToHClip(positionWS);
+                
+                return output;
+            }
+            
+            half4 DepthFrag(DepthVaryings input) : SV_Target
             {
                 return 0;
             }
