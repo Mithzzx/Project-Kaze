@@ -3767,10 +3767,14 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6397ded32036645eda9c89eab8dedc1d, type: 3}
   m_Name: 
   m_EditorClassIdentifier: '::'
-  grassCount: 800000
+  grassCount: 400000
   terrainSize: 100
   minGrassHeight: 0.3
   maxGrassHeight: 1
+  clumpScale: 0.05
+  clumpStrength: 0.8
+  heightScale: 0.05
+  heightFactor: 0.5
   computeShader: {fileID: 7200000, guid: 8970e443962894e3d9c3a6024bbaca91, type: 3}
   grassMaterial: {fileID: 2100000, guid: e5e936fc3f91f44558851d4f3181fd9b, type: 2}
   grassMesh: {fileID: -2432090755550338912, guid: b54145cfc0e594e5bb3ffa19bcca04bf, type: 3}

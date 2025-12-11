@@ -12,6 +12,12 @@ public class GrassRenderer : MonoBehaviour
     [SerializeField] private float minGrassHeight = 0.3f;
     [SerializeField] private float maxGrassHeight = 1.0f;
 
+    [Header("Generation Settings")]
+    [SerializeField] private float clumpScale = 0.05f;
+    [SerializeField] private float clumpStrength = 0.8f;
+    [SerializeField] private float heightScale = 0.05f;
+    [SerializeField] private float heightFactor = 0.5f;
+
     [Header("References")]
     [SerializeField] private ComputeShader computeShader;
     [SerializeField] private Material grassMaterial;
@@ -108,6 +114,12 @@ public class GrassRenderer : MonoBehaviour
         computeShader.SetFloat("_Time", Time.time);
         computeShader.SetInt("_GrassCount", grassCount);
         computeShader.SetInt("_GrassPerRow", grassPerRow);
+
+        // New Parameters
+        computeShader.SetFloat("_ClumpScale", clumpScale);
+        computeShader.SetFloat("_ClumpStrength", clumpStrength);
+        computeShader.SetFloat("_HeightScale", heightScale);
+        computeShader.SetFloat("_HeightFactor", heightFactor);
 
         // Calculate thread groups needed
         int threadGroups = Mathf.CeilToInt((float)grassCount / threadGroupSize);

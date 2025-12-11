@@ -4,9 +4,20 @@ Shader "Custom/GrassShader"
     {
         _BaseColor ("Base Color", Color) = (0.1, 0.5, 0.1, 1)
         _TipColor ("Tip Color", Color) = (0.4, 0.8, 0.2, 1)
-        _WindStrength ("Wind Strength", Range(0, 2)) = 0.5
-        _WindSpeed ("Wind Speed", Range(0, 5)) = 2.0
-        _WindFrequency ("Wind Frequency", Range(0, 5)) = 1.0
+        
+        [Header(Blade Shape)]
+        _BladeWidth ("Blade Width", Float) = 0.05
+        _BladeHeight ("Blade Height Multiplier", Float) = 1.0
+        
+        [Header(Wind)]
+        _WindMap ("Wind Noise Texture", 2D) = "white" {}
+        _WindVelocity ("Wind Velocity (XY direction)", Vector) = (1, 0, 0, 0)
+        _WindFrequency ("Wind Frequency (Tile Size)", Float) = 0.05
+        _WindGustStrength ("Gust Strength", Float) = 1.0
+        _WindFlutterStrength ("Flutter Strength", Float) = 0.1
+        
+        [Header(Lighting)]
+        _Translucency ("Translucency Strength", Range(0,1)) = 0.5
     }
     
     SubShader
@@ -17,7 +28,124 @@ Shader "Custom/GrassShader"
             "Queue" = "Geometry"
             "RenderPipeline" = "UniversalPipeline"
         }
+
+        // --- SHARED CODE START ---
+        HLSLINCLUDE
+        #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+        #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
         
+        // Data Structures
+        struct GrassData
+        {
+            float3 position;
+            float height;
+            float2 facing;
+            float windPhase;
+        };
+        
+        // Variables
+        TEXTURE2D(_WindMap);
+        SAMPLER(sampler_WindMap);
+
+        CBUFFER_START(UnityPerMaterial)
+            float4 _BaseColor;
+            float4 _TipColor;
+            float4 _WindMap_ST;
+            float4 _WindVelocity;
+            float _BladeWidth;
+            float _BladeHeight;
+            float _WindFrequency;
+            float _WindGustStrength;
+            float _WindFlutterStrength;
+            float _Translucency;
+        CBUFFER_END
+        
+        #if defined(UNITY_PROCEDURAL_INSTANCING_ENABLED)
+            StructuredBuffer<GrassData> _GrassDataBuffer;
+        #endif
+
+        // Helper Functions
+        float3 Bezier(float3 p0, float3 p1, float3 p2, float3 p3, float t)
+        {
+            float u = 1.0 - t;
+            float tt = t * t;
+            float uu = u * u;
+            float uuu = uu * u;
+            float ttt = tt * t;
+            return uuu * p0 + 3 * uu * t * p1 + 3 * u * tt * p2 + ttt * p3;
+        }
+
+        float3 BezierTangent(float3 p0, float3 p1, float3 p2, float3 p3, float t)
+        {
+            float u = 1.0 - t;
+            float uu = u * u;
+            float tt = t * t;
+            return 3 * uu * (p1 - p0) + 6 * u * t * (p2 - p1) + 3 * tt * (p3 - p2);
+        }
+
+        // Shared Vertex Calculation
+        void CalculateGrassVertex(inout float3 positionOS, inout float3 normalOS, float2 uv, GrassData grass)
+        {
+            // 1. Setup
+            float t = saturate(uv.y);
+            float height = grass.height * _BladeHeight;
+            
+            // 2. Wind Calculation
+            float3 worldPos = grass.position;
+            
+            // Macro Wind
+            float2 windUV = worldPos.xz * _WindFrequency + _Time.y * _WindVelocity.xy;
+            float windSample = SAMPLE_TEXTURE2D_LOD(_WindMap, sampler_WindMap, windUV, 0).r;
+            
+            // Micro Wind (Flutter)
+            float flutter = sin(_Time.y * 15.0 + grass.windPhase * 10.0) * _WindFlutterStrength;
+            
+            // Combine
+            float currentWindImpact = (windSample * _WindGustStrength) + flutter;
+            
+            // Wind Direction (Object Space)
+            float3 windDirWS = normalize(float3(_WindVelocity.x, 0, _WindVelocity.y));
+            
+            // Rotate wind to Object Space
+            float2 facing = grass.facing;
+            float3 right = float3(facing.y, 0, -facing.x);
+            float3 forward = float3(facing.x, 0, facing.y);
+            
+            float3 windDirOS;
+            windDirOS.x = dot(windDirWS, right);
+            windDirOS.y = 0;
+            windDirOS.z = dot(windDirWS, forward);
+            
+            // 3. Bezier Control Points
+            float3 leanVector = windDirOS * currentWindImpact;
+            
+            float3 p0 = float3(0, 0, 0);
+            float3 p1 = float3(0, height * 0.33, 0);
+            float3 p2 = float3(0, height * 0.66, 0) + leanVector;
+            float3 p3 = float3(0, height, 0) + leanVector * 1.5;
+            
+            // 4. Calculate Position
+            float3 spinePos = Bezier(p0, p1, p2, p3, t);
+            
+            // 5. Apply Width
+            // Assuming input mesh is a quad with x centered at 0
+            // We can use the input positionOS.x to determine width offset
+            // Or use UV.x if we want to be procedural about width too
+            float width = _BladeWidth;
+            float3 widthOffset = float3(positionOS.x * (width / 0.05), 0, 0); // Scale based on default width 0.05
+            
+            positionOS = spinePos + widthOffset;
+            
+            // 6. Recalculate Normal
+            float3 tangent = normalize(BezierTangent(p0, p1, p2, p3, t));
+            normalOS = normalize(cross(float3(1, 0, 0), tangent));
+        }
+        ENDHLSL
+        // --- SHARED CODE END ---
+        
+        // ------------------------------------------------------------------
+        // Forward Lit Pass
+        // ------------------------------------------------------------------
         Pass
         {
             Name "ForwardLit"
@@ -36,30 +164,6 @@ Shader "Custom/GrassShader"
             #pragma instancing_options procedural:setup
             #pragma target 4.5
             
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
-            
-            // Grass data structure - must match compute shader
-            struct GrassData
-            {
-                float3 position;
-                float height;
-                float2 facing;
-                float windPhase;
-            };
-            
-            CBUFFER_START(UnityPerMaterial)
-                float4 _BaseColor;
-                float4 _TipColor;
-                float _WindStrength;
-                float _WindSpeed;
-                float _WindFrequency;
-            CBUFFER_END
-            
-            #if defined(UNITY_PROCEDURAL_INSTANCING_ENABLED)
-                StructuredBuffer<GrassData> _GrassDataBuffer;
-            #endif
-            
             struct Attributes
             {
                 float4 positionOS : POSITION;
@@ -77,22 +181,16 @@ Shader "Custom/GrassShader"
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
             
-            // Instance data stored per-instance
-            float _GrassHeight;
-            float _GrassWindPhase;
-            
             void setup()
             {
                 #if defined(UNITY_PROCEDURAL_INSTANCING_ENABLED)
                     GrassData grass = _GrassDataBuffer[unity_InstanceID];
                     
-                    // Build rotation matrix from facing direction
                     float2 facing = grass.facing;
                     float3 right = float3(facing.y, 0, -facing.x);
                     float3 up = float3(0, 1, 0);
                     float3 forward = float3(facing.x, 0, facing.y);
                     
-                    // Create transformation matrix
                     unity_ObjectToWorld = float4x4(
                         right.x, up.x, forward.x, grass.position.x,
                         right.y, up.y, forward.y, grass.position.y,
@@ -100,52 +198,33 @@ Shader "Custom/GrassShader"
                         0, 0, 0, 1
                     );
                     
-                    // Inverse transpose for normals (simplified for uniform scale)
                     unity_WorldToObject = float4x4(
                         right.x, right.y, right.z, -dot(right, grass.position),
                         up.x, up.y, up.z, -dot(up, grass.position),
                         forward.x, forward.y, forward.z, -dot(forward, grass.position),
                         0, 0, 0, 1
                     );
-                    
-                    _GrassHeight = grass.height;
-                    _GrassWindPhase = grass.windPhase;
                 #endif
             }
             
             Varyings vert(Attributes input)
             {
                 Varyings output = (Varyings)0;
-                
                 UNITY_SETUP_INSTANCE_ID(input);
                 UNITY_TRANSFER_INSTANCE_ID(input, output);
                 
-                float4 posOS = input.positionOS;
+                float3 posOS = input.positionOS.xyz;
+                float3 normalOS = input.normalOS;
                 
                 #if defined(UNITY_PROCEDURAL_INSTANCING_ENABLED)
-                    // Scale height based on grass data
-                    posOS.y *= _GrassHeight;
-                    
-                    // Store normalized height for color gradient
-                    output.heightGradient = saturate(input.positionOS.y);
-                    
-                    // Wind animation
-                    float windTime = _Time.y * _WindSpeed + _GrassWindPhase;
-                    float windWave = sin(windTime + posOS.x * _WindFrequency) * 
-                                     cos(windTime * 0.7 + posOS.z * _WindFrequency * 0.8);
-                    
-                    // Apply wind - more effect at the top of the blade
-                    float windInfluence = output.heightGradient * output.heightGradient;
-                    posOS.x += windWave * _WindStrength * windInfluence;
-                    posOS.z += windWave * _WindStrength * 0.5 * windInfluence;
-                #else
-                    output.heightGradient = saturate(input.positionOS.y);
+                    GrassData grass = _GrassDataBuffer[unity_InstanceID];
+                    CalculateGrassVertex(posOS, normalOS, input.uv, grass);
                 #endif
                 
-                // Transform to world and clip space
-                output.positionWS = TransformObjectToWorld(posOS.xyz);
+                output.positionWS = TransformObjectToWorld(posOS);
                 output.positionCS = TransformWorldToHClip(output.positionWS);
-                output.normalWS = TransformObjectToWorldNormal(input.normalOS);
+                output.normalWS = TransformObjectToWorldNormal(normalOS);
+                output.heightGradient = saturate(input.uv.y);
                 
                 return output;
             }
@@ -154,32 +233,42 @@ Shader "Custom/GrassShader"
             {
                 UNITY_SETUP_INSTANCE_ID(input);
                 
-                // Gradient from base to tip
+                // 1. Base Color & Gradient
                 half3 color = lerp(_BaseColor.rgb, _TipColor.rgb, input.heightGradient);
                 
-                // Simple lighting
+                // 2. Fake AO (Darken roots)
+                float heightAO = clamp(input.heightGradient + 0.2, 0, 1);
+                color *= heightAO;
+                
+                // 3. Lighting Data
                 float3 normalWS = normalize(input.normalWS);
+                Light mainLight = GetMainLight(TransformWorldToShadowCoord(input.positionWS));
+                float3 lightDir = mainLight.direction;
+                float3 viewDir = GetWorldSpaceViewDir(input.positionWS);
                 
-                // Get main light
-                Light mainLight = GetMainLight();
+                // 4. Diffuse Lighting
+                float NdotL = saturate(dot(normalWS, lightDir));
+                float3 diffuse = color * mainLight.color * (NdotL * mainLight.shadowAttenuation);
                 
-                // Lambertian diffuse with wrap lighting for grass
-                float NdotL = dot(normalWS, mainLight.direction);
-                float wrap = 0.5;
-                float diffuse = saturate((NdotL + wrap) / (1.0 + wrap));
+                // 5. Translucency (Backlight)
+                float3 backLightDir = lightDir + (viewDir * 0.5); 
+                float transDot = pow(saturate(dot(viewDir, -lightDir)), 8.0);
+                float3 transLight = transDot * _Translucency * color * mainLight.color * mainLight.shadowAttenuation;
                 
-                // Add some ambient
-                half3 ambient = SampleSH(normalWS) * 0.5;
+                // 6. Ambient
+                float3 ambient = SampleSH(normalWS) * color;
                 
-                // Final color
-                half3 finalColor = color * (mainLight.color * diffuse + ambient);
+                // Combine
+                float3 finalColor = diffuse + transLight + ambient;
                 
                 return half4(finalColor, 1.0);
             }
             ENDHLSL
         }
         
-        // Shadow caster pass
+        // ------------------------------------------------------------------
+        // Shadow Caster Pass
+        // ------------------------------------------------------------------
         Pass
         {
             Name "ShadowCaster"
@@ -198,31 +287,23 @@ Shader "Custom/GrassShader"
             #pragma instancing_options procedural:setup
             #pragma target 4.5
             
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Shadows.hlsl"
             
-            struct GrassData
+            struct Attributes
             {
-                float3 position;
-                float height;
-                float2 facing;
-                float windPhase;
+                float4 positionOS : POSITION;
+                float3 normalOS : NORMAL;
+                float2 uv : TEXCOORD0;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
             };
             
-            CBUFFER_START(UnityPerMaterial)
-                float4 _BaseColor;
-                float4 _TipColor;
-                float _WindStrength;
-                float _WindSpeed;
-                float _WindFrequency;
-            CBUFFER_END
+            struct Varyings
+            {
+                float4 positionCS : SV_POSITION;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
+            };
             
-            #if defined(UNITY_PROCEDURAL_INSTANCING_ENABLED)
-                StructuredBuffer<GrassData> _GrassDataBuffer;
-            #endif
-            
-            float _GrassHeight;
-            float _GrassWindPhase;
+            float3 _LightDirection;
             
             void setup()
             {
@@ -247,51 +328,25 @@ Shader "Custom/GrassShader"
                         forward.x, forward.y, forward.z, -dot(forward, grass.position),
                         0, 0, 0, 1
                     );
-                    
-                    _GrassHeight = grass.height;
-                    _GrassWindPhase = grass.windPhase;
                 #endif
             }
-            
-            struct Attributes
-            {
-                float4 positionOS : POSITION;
-                float3 normalOS : NORMAL;
-                UNITY_VERTEX_INPUT_INSTANCE_ID
-            };
-            
-            struct Varyings
-            {
-                float4 positionCS : SV_POSITION;
-                UNITY_VERTEX_INPUT_INSTANCE_ID
-            };
-            
-            float3 _LightDirection;
             
             Varyings ShadowVert(Attributes input)
             {
                 Varyings output = (Varyings)0;
-                
                 UNITY_SETUP_INSTANCE_ID(input);
                 UNITY_TRANSFER_INSTANCE_ID(input, output);
                 
-                float4 posOS = input.positionOS;
+                float3 posOS = input.positionOS.xyz;
+                float3 normalOS = input.normalOS;
                 
                 #if defined(UNITY_PROCEDURAL_INSTANCING_ENABLED)
-                    posOS.y *= _GrassHeight;
-                    
-                    float heightGradient = saturate(input.positionOS.y);
-                    float windTime = _Time.y * _WindSpeed + _GrassWindPhase;
-                    float windWave = sin(windTime + posOS.x * _WindFrequency) * 
-                                     cos(windTime * 0.7 + posOS.z * _WindFrequency * 0.8);
-                    
-                    float windInfluence = heightGradient * heightGradient;
-                    posOS.x += windWave * _WindStrength * windInfluence;
-                    posOS.z += windWave * _WindStrength * 0.5 * windInfluence;
+                    GrassData grass = _GrassDataBuffer[unity_InstanceID];
+                    CalculateGrassVertex(posOS, normalOS, input.uv, grass);
                 #endif
                 
-                float3 positionWS = TransformObjectToWorld(posOS.xyz);
-                float3 normalWS = TransformObjectToWorldNormal(input.normalOS);
+                float3 positionWS = TransformObjectToWorld(posOS);
+                float3 normalWS = TransformObjectToWorldNormal(normalOS);
                 
                 output.positionCS = TransformWorldToHClip(ApplyShadowBias(positionWS, normalWS, _LightDirection));
                 
