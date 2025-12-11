@@ -2,6 +2,7 @@
 // Generates 1M grass positions with organic clumping and variation
 
 #pragma kernel CSMain
+#pragma kernel CSCull
 
 // Grass data structure matching the one in C# and render shader
 struct GrassData
@@ -14,6 +15,12 @@ struct GrassData
 
 // Output buffer for grass positions
 RWStructuredBuffer<GrassData> grassDataBuffer;
+
+// Culling buffers
+StructuredBuffer<GrassData> _SourceGrassBuffer;
+AppendStructuredBuffer<GrassData> _CulledGrassBuffer;
+float4 _FrustumPlanes[6];
+float _MaxDrawDistance;
 
 // Parameters
 float _TerrainSize;     // Size of the terrain
@@ -133,15 +140,58 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     grass.position = float3(finalPos2D.x, 0.0, finalPos2D.y);
     
     // Randomize height slightly per blade, but respect the clump height
-    float randomHeight = lerp(_MinHeight, _MaxHeight, hash12(id.xy));
+    // Use basePos for seed to avoid precision issues with large IDs
+    float randomHeight = lerp(_MinHeight, _MaxHeight, hash12(basePos * 1.23 + 45.6));
     grass.height = randomHeight * heightMultiplier;
     
     // Random Rotation (0 to 2PI)
-    float facingAngle = hash12(id.xy + 56.78) * 6.28318;
+    float facingAngle = hash12(basePos + 56.78) * 6.28318;
     grass.facing = float2(cos(facingAngle), sin(facingAngle));
     
     // Wind Phase
-    grass.windPhase = finalPos2D.x * 0.1 + finalPos2D.y * 0.1 + hash12(id.xy) * 0.5;
+    grass.windPhase = finalPos2D.x * 0.1 + finalPos2D.y * 0.1 + hash12(basePos + 78.9) * 0.5;
     
     grassDataBuffer[id.x] = grass;
+}
+
+[numthreads(256, 1, 1)]
+void CSCull(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _GrassCount)
+        return;
+
+    GrassData grass = _SourceGrassBuffer[id.x];
+    float3 pos = grass.position;
+
+    // Distance Culling
+    // We assume camera is at (0,0,0) relative to the planes, but for distance we might need camera pos
+    // However, frustum culling implicitly handles distance if the far plane is set correctly.
+    // But often we want a specific grass draw distance shorter than the far plane.
+    // For now, let's stick to frustum culling.
+
+    // Frustum Culling
+    // Check a sphere around the grass blade
+    // Center is at half height, radius is height
+    float3 center = pos + float3(0, grass.height * 0.5, 0);
+    float radius = grass.height; // Conservative radius
+
+    bool visible = true;
+    for (int i = 0; i < 6; i++)
+    {
+        float4 plane = _FrustumPlanes[i];
+        // dot(normal, point) + distance
+        float dist = dot(plane.xyz, center) + plane.w;
+        
+        // If point is behind plane by more than radius, it's outside
+        if (dist < -radius)
+        {
+            visible = false;
+            break;
+        }
+    }
+
+    if (visible)
+    {
+        _CulledGrassBuffer.Append(grass);
+    }
 }

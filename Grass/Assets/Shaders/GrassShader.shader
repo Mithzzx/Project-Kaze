@@ -18,6 +18,10 @@ Shader "Custom/GrassShader"
         
         [Header(Lighting)]
         _Translucency ("Translucency Strength", Range(0,1)) = 0.5
+        _TranslucencyDistortion ("Translucency Distortion", Range(0,1)) = 0.1
+        _TranslucencyPower ("Translucency Power", Range(1,10)) = 4.0
+        _TranslucencyScale ("Translucency Scale", Range(0,5)) = 1.0
+        _ShadowStrength ("Shadow Strength", Range(0,1)) = 1.0
     }
     
     SubShader
@@ -58,6 +62,10 @@ Shader "Custom/GrassShader"
             float _WindGustStrength;
             float _WindFlutterStrength;
             float _Translucency;
+            float _TranslucencyDistortion;
+            float _TranslucencyPower;
+            float _TranslucencyScale;
+            float _ShadowStrength;
         CBUFFER_END
         
         #if defined(UNITY_PROCEDURAL_INSTANCING_ENABLED)
@@ -246,14 +254,20 @@ Shader "Custom/GrassShader"
                 float3 lightDir = mainLight.direction;
                 float3 viewDir = GetWorldSpaceViewDir(input.positionWS);
                 
+                // Shadow attenuation with strength control
+                float shadowAtten = mainLight.shadowAttenuation;
+                shadowAtten = lerp(1.0, shadowAtten, _ShadowStrength);
+
                 // 4. Diffuse Lighting
                 float NdotL = saturate(dot(normalWS, lightDir));
-                float3 diffuse = color * mainLight.color * (NdotL * mainLight.shadowAttenuation);
+                float3 diffuse = color * mainLight.color * (NdotL * shadowAtten);
                 
                 // 5. Translucency (Backlight)
-                float3 backLightDir = lightDir + (viewDir * 0.5); 
-                float transDot = pow(saturate(dot(viewDir, -lightDir)), 8.0);
-                float3 transLight = transDot * _Translucency * color * mainLight.color * mainLight.shadowAttenuation;
+                // Calculate translucency based on light direction relative to view and normal
+                // This allows light to pass through the blade when the sun is behind it
+                float3 transLightDir = lightDir + normalWS * _TranslucencyDistortion;
+                float transDot = pow(saturate(dot(viewDir, -transLightDir)), _TranslucencyPower);
+                float3 transLight = transDot * _TranslucencyScale * _Translucency * color * mainLight.color * shadowAtten;
                 
                 // 6. Ambient
                 float3 ambient = SampleSH(normalWS) * color;

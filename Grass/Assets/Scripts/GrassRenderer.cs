@@ -26,9 +26,11 @@ public class GrassRenderer : MonoBehaviour
     [Header("Rendering")]
     [SerializeField] private bool castShadows = true;
     [SerializeField] private bool receiveShadows = true;
+    [SerializeField] private Camera mainCamera;
 
     // Compute buffer to hold grass data
-    private ComputeBuffer grassDataBuffer;
+    private ComputeBuffer sourceGrassBuffer;
+    private ComputeBuffer culledGrassBuffer;
     
     // Indirect arguments buffer for DrawMeshInstancedIndirect
     private ComputeBuffer argsBuffer;
@@ -47,10 +49,15 @@ public class GrassRenderer : MonoBehaviour
 
     private Bounds renderBounds;
     private int kernelIndex;
+    private int cullKernelIndex;
     private uint threadGroupSize;
+    private Plane[] cameraFrustumPlanes = new Plane[6];
+    private float[] frustumPlaneFloats = new float[24]; // 6 planes * 4 floats
 
     private void Start()
     {
+        if (mainCamera == null) mainCamera = Camera.main;
+
         // Validate references
         if (computeShader == null || grassMaterial == null)
         {
@@ -80,13 +87,14 @@ public class GrassRenderer : MonoBehaviour
         Debug.Log($"Initializing grass renderer with {grassCount:N0} blades ({grassPerRow}x{grassPerRow} grid)");
 
         // Create grass data buffer
-        grassDataBuffer = new ComputeBuffer(grassCount, GrassData.Size);
+        sourceGrassBuffer = new ComputeBuffer(grassCount, GrassData.Size);
+        culledGrassBuffer = new ComputeBuffer(grassCount, GrassData.Size, ComputeBufferType.Append);
 
         // Create indirect arguments buffer
         // Args: [indexCount, instanceCount, indexStart, baseVertex, instanceStart]
         uint[] args = new uint[5];
         args[0] = grassMesh.GetIndexCount(0);
-        args[1] = (uint)grassCount;
+        args[1] = 0; // Initial instance count is 0, will be set by culling
         args[2] = grassMesh.GetIndexStart(0);
         args[3] = grassMesh.GetBaseVertex(0);
         args[4] = 0;
@@ -99,6 +107,7 @@ public class GrassRenderer : MonoBehaviour
 
         // Get compute shader kernel
         kernelIndex = computeShader.FindKernel("CSMain");
+        cullKernelIndex = computeShader.FindKernel("CSCull");
         computeShader.GetKernelThreadGroupSizes(kernelIndex, out threadGroupSize, out _, out _);
     }
 
@@ -107,7 +116,7 @@ public class GrassRenderer : MonoBehaviour
         int grassPerRow = Mathf.CeilToInt(Mathf.Sqrt(grassCount));
 
         // Set compute shader parameters
-        computeShader.SetBuffer(kernelIndex, "grassDataBuffer", grassDataBuffer);
+        computeShader.SetBuffer(kernelIndex, "grassDataBuffer", sourceGrassBuffer);
         computeShader.SetFloat("_TerrainSize", terrainSize);
         computeShader.SetFloat("_MinHeight", minGrassHeight);
         computeShader.SetFloat("_MaxHeight", maxGrassHeight);
@@ -127,29 +136,60 @@ public class GrassRenderer : MonoBehaviour
         // Dispatch compute shader
         computeShader.Dispatch(kernelIndex, threadGroups, 1, 1);
 
-        // Set material buffer
-        grassMaterial.SetBuffer("_GrassDataBuffer", grassDataBuffer);
+        // Set material buffer (initially source, but will be overridden by culling)
+        grassMaterial.SetBuffer("_GrassDataBuffer", sourceGrassBuffer);
         
         Debug.Log($"Compute shader dispatched with {threadGroups} thread groups");
     }
 
     private void Update()
     {
-        // Render grass using GPU instancing
-        if (grassDataBuffer != null && argsBuffer != null)
+        if (sourceGrassBuffer == null || argsBuffer == null || culledGrassBuffer == null) return;
+
+        // 1. Frustum Culling
+        // Reset counter
+        culledGrassBuffer.SetCounterValue(0);
+
+        // Get frustum planes
+        GeometryUtility.CalculateFrustumPlanes(mainCamera, cameraFrustumPlanes);
+        for (int i = 0; i < 6; i++)
         {
-            Graphics.DrawMeshInstancedIndirect(
-                grassMesh,
-                0, // submesh index
-                grassMaterial,
-                renderBounds,
-                argsBuffer,
-                0, // args offset
-                null, // property block
-                castShadows ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.Off,
-                receiveShadows
-            );
+            Vector3 normal = cameraFrustumPlanes[i].normal;
+            float distance = cameraFrustumPlanes[i].distance;
+            frustumPlaneFloats[i * 4 + 0] = normal.x;
+            frustumPlaneFloats[i * 4 + 1] = normal.y;
+            frustumPlaneFloats[i * 4 + 2] = normal.z;
+            frustumPlaneFloats[i * 4 + 3] = distance;
         }
+
+        // Set culling parameters
+        computeShader.SetBuffer(cullKernelIndex, "_SourceGrassBuffer", sourceGrassBuffer);
+        computeShader.SetBuffer(cullKernelIndex, "_CulledGrassBuffer", culledGrassBuffer);
+        computeShader.SetFloats("_FrustumPlanes", frustumPlaneFloats);
+        computeShader.SetInt("_GrassCount", grassCount);
+
+        // Dispatch culling
+        int threadGroups = Mathf.CeilToInt((float)grassCount / threadGroupSize);
+        computeShader.Dispatch(cullKernelIndex, threadGroups, 1, 1);
+
+        // Copy count to args buffer (index 1 is instance count, so offset is 4 bytes)
+        ComputeBuffer.CopyCount(culledGrassBuffer, argsBuffer, 4);
+
+        // Set the culled buffer on the material
+        grassMaterial.SetBuffer("_GrassDataBuffer", culledGrassBuffer);
+
+        // 2. Render
+        Graphics.DrawMeshInstancedIndirect(
+            grassMesh,
+            0, // submesh index
+            grassMaterial,
+            renderBounds,
+            argsBuffer,
+            0, // args offset
+            null, // property block
+            castShadows ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.Off,
+            receiveShadows
+        );
     }
 
     /// <summary>
@@ -215,14 +255,16 @@ public class GrassRenderer : MonoBehaviour
     private void OnDestroy()
     {
         // Clean up compute buffers
-        grassDataBuffer?.Release();
+        sourceGrassBuffer?.Release();
+        culledGrassBuffer?.Release();
         argsBuffer?.Release();
     }
 
     private void OnDisable()
     {
         // Clean up compute buffers
-        grassDataBuffer?.Release();
+        sourceGrassBuffer?.Release();
+        culledGrassBuffer?.Release();
         argsBuffer?.Release();
     }
 
