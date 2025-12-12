@@ -22,7 +22,7 @@ public class GrassRenderer : MonoBehaviour
     [Header("References")]
     [SerializeField] private ComputeShader computeShader;
     [SerializeField] private Material grassMaterial;
-    [SerializeField] private Mesh grassMesh;
+    private Mesh grassMesh;
 
     [Header("Rendering")]
     [SerializeField] private bool castShadows = true;
@@ -43,9 +43,10 @@ public class GrassRenderer : MonoBehaviour
         public float height;
         public Vector2 facing;
         public float windPhase;
+        public float stiffness;
         
-        // Size in bytes: 3*4 + 4 + 2*4 + 4 = 24 bytes
-        public static int Size => sizeof(float) * 7;
+        // Size in bytes: 3*4 + 4 + 2*4 + 4 + 4 = 28 bytes
+        public static int Size => sizeof(float) * 8;
     }
 
     private Bounds renderBounds;
@@ -73,11 +74,8 @@ public class GrassRenderer : MonoBehaviour
             return;
         }
 
-        // Create grass mesh if not assigned
-        if (grassMesh == null)
-        {
-            grassMesh = CreateGrassBladeMesh();
-        }
+        // Create grass mesh
+        grassMesh = CreateGrassBladeMesh();
 
         InitializeBuffers();
         DispatchComputeShader();
@@ -189,21 +187,57 @@ public class GrassRenderer : MonoBehaviour
         // Copy count to args buffer (index 1 is instance count, so offset is 4 bytes)
         ComputeBuffer.CopyCount(culledGrassBuffer, argsBuffer, 4);
 
-        // Set the culled buffer on the material
+        // Set the culled buffer on the material for main camera rendering
         grassMaterial.SetBuffer("_GrassDataBuffer", culledGrassBuffer);
 
-        // 2. Render
+        // 2. Render with culled buffer (for main camera view)
         Graphics.DrawMeshInstancedIndirect(
             grassMesh,
-            0, // submesh index
+            0,
             grassMaterial,
             renderBounds,
             argsBuffer,
-            0, // args offset
-            null, // property block
-            castShadows ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.Off,
-            receiveShadows
+            0,
+            null,
+            UnityEngine.Rendering.ShadowCastingMode.Off, // Main render doesn't cast (shadow render does)
+            receiveShadows,
+            0,
+            mainCamera // Only main camera uses culled buffer
         );
+
+        // 3. Render shadows using FULL source buffer (not culled)
+        // This ensures all grass casts shadows regardless of main camera frustum
+        if (castShadows)
+        {
+            // Create args for full grass count
+            uint[] shadowArgs = new uint[5];
+            shadowArgs[0] = grassMesh.GetIndexCount(0);
+            shadowArgs[1] = (uint)grassCount; // Full count, not culled
+            shadowArgs[2] = grassMesh.GetIndexStart(0);
+            shadowArgs[3] = grassMesh.GetBaseVertex(0);
+            shadowArgs[4] = 0;
+            argsBuffer.SetData(shadowArgs);
+
+            // Use source buffer for shadows
+            grassMaterial.SetBuffer("_GrassDataBuffer", sourceGrassBuffer);
+
+            Graphics.DrawMeshInstancedIndirect(
+                grassMesh,
+                0,
+                grassMaterial,
+                renderBounds,
+                argsBuffer,
+                0,
+                null,
+                UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly, // Only cast shadows, don't render
+                false,
+                0,
+                null // null = all cameras (shadow cameras)
+            );
+
+            // Restore culled buffer for next frame
+            grassMaterial.SetBuffer("_GrassDataBuffer", culledGrassBuffer);
+        }
     }
 
     /// <summary>
