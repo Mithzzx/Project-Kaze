@@ -11,6 +11,9 @@ public class GrassRenderer : MonoBehaviour
     [SerializeField] private float terrainSize = 100f;
     [SerializeField] private float minGrassHeight = 0.3f;
     [SerializeField] private float maxGrassHeight = 1.0f;
+    [SerializeField, Range(1, 15)] private int bladeSegments = 3;
+    [SerializeField] private float lod0Distance = 30.0f;
+    [SerializeField] private float maxDrawDistance = 150.0f;
 
     [Header("Generation Settings")]
     [SerializeField] private float clumpScale = 0.05f;
@@ -23,23 +26,25 @@ public class GrassRenderer : MonoBehaviour
     [SerializeField] private ComputeShader computeShader;
     [SerializeField] private Material grassMaterial;
     [SerializeField] private Terrain terrain; // Added Terrain reference
-    private Mesh grassMesh;
+    private Mesh grassMeshLOD0;
+    private Mesh grassMeshLOD1;
 
     [Header("Rendering")]
     [SerializeField] private bool castShadows = true;
+    [SerializeField] private bool castShadowsLOD1 = false; // Optimization: Disable shadows for far grass
     [SerializeField] private bool receiveShadows = true;
     [SerializeField] private Camera mainCamera;
 
     // Compute buffer to hold grass data
     private ComputeBuffer sourceGrassBuffer;
-    private ComputeBuffer culledGrassBuffer;
+    private ComputeBuffer culledGrassBufferLOD0;
+    private ComputeBuffer culledGrassBufferLOD1;
     
     // Indirect arguments buffer for DrawMeshInstancedIndirect
-    private ComputeBuffer argsBuffer;
-    private ComputeBuffer shadowArgsBuffer;
+    private ComputeBuffer argsBufferLOD0;
+    private ComputeBuffer argsBufferLOD1;
 
     private MaterialPropertyBlock visualMPB;
-    private MaterialPropertyBlock shadowMPB;
     
     // Grass data structure - must match compute shader
     private struct GrassData
@@ -78,9 +83,9 @@ public class GrassRenderer : MonoBehaviour
             enabled = false;
             return;
         }
-
         // Create grass mesh
-        grassMesh = CreateGrassBladeMesh();
+        grassMeshLOD0 = CreateGrassBladeMesh(bladeSegments);
+        grassMeshLOD1 = CreateGrassBladeMesh(1); // Low quality mesh (1 segment = 1 quad + tip)
 
         InitializeBuffers();
         DispatchComputeShader();
@@ -98,30 +103,30 @@ public class GrassRenderer : MonoBehaviour
 
         // Create grass data buffer
         sourceGrassBuffer = new ComputeBuffer(grassCount, GrassData.Size);
-        culledGrassBuffer = new ComputeBuffer(grassCount, GrassData.Size, ComputeBufferType.Append);
+        culledGrassBufferLOD0 = new ComputeBuffer(grassCount, GrassData.Size, ComputeBufferType.Append);
+        culledGrassBufferLOD1 = new ComputeBuffer(grassCount, GrassData.Size, ComputeBufferType.Append);
 
-        // Create indirect arguments buffer
-        // Args: [indexCount, instanceCount, indexStart, baseVertex, instanceStart]
-        uint[] args = new uint[5];
-        args[0] = grassMesh.GetIndexCount(0);
-        args[1] = 0; // Initial instance count is 0, will be set by culling
-        args[2] = grassMesh.GetIndexStart(0);
-        args[3] = grassMesh.GetBaseVertex(0);
-        args[4] = 0;
+        // Create indirect arguments buffer for LOD0
+        uint[] argsLOD0 = new uint[5];
+        argsLOD0[0] = grassMeshLOD0.GetIndexCount(0);
+        argsLOD0[1] = 0; 
+        argsLOD0[2] = grassMeshLOD0.GetIndexStart(0);
+        argsLOD0[3] = grassMeshLOD0.GetBaseVertex(0);
+        argsLOD0[4] = 0;
 
-        argsBuffer = new ComputeBuffer(1, args.Length * sizeof(uint), ComputeBufferType.IndirectArguments);
-        argsBuffer.SetData(args);
+        argsBufferLOD0 = new ComputeBuffer(1, argsLOD0.Length * sizeof(uint), ComputeBufferType.IndirectArguments);
+        argsBufferLOD0.SetData(argsLOD0);
 
-        // Create shadow args buffer (static count)
-        uint[] shadowArgs = new uint[5];
-        shadowArgs[0] = grassMesh.GetIndexCount(0);
-        shadowArgs[1] = (uint)grassCount; // Full count, not culled
-        shadowArgs[2] = grassMesh.GetIndexStart(0);
-        shadowArgs[3] = grassMesh.GetBaseVertex(0);
-        shadowArgs[4] = 0;
+        // Create indirect arguments buffer for LOD1
+        uint[] argsLOD1 = new uint[5];
+        argsLOD1[0] = grassMeshLOD1.GetIndexCount(0);
+        argsLOD1[1] = 0; 
+        argsLOD1[2] = grassMeshLOD1.GetIndexStart(0);
+        argsLOD1[3] = grassMeshLOD1.GetBaseVertex(0);
+        argsLOD1[4] = 0;
 
-        shadowArgsBuffer = new ComputeBuffer(1, shadowArgs.Length * sizeof(uint), ComputeBufferType.IndirectArguments);
-        shadowArgsBuffer.SetData(shadowArgs);
+        argsBufferLOD1 = new ComputeBuffer(1, argsLOD1.Length * sizeof(uint), ComputeBufferType.IndirectArguments);
+        argsBufferLOD1.SetData(argsLOD1);
 
         // Set render bounds (large enough to contain all grass)
         renderBounds = new Bounds(Vector3.zero, Vector3.one * terrainSize * 2);
@@ -181,11 +186,12 @@ public class GrassRenderer : MonoBehaviour
             DispatchComputeShader();
         }
 
-        if (sourceGrassBuffer == null || argsBuffer == null || culledGrassBuffer == null) return;
+        if (sourceGrassBuffer == null || argsBufferLOD0 == null || culledGrassBufferLOD0 == null) return;
 
         // 1. Frustum Culling
-        // Reset counter
-        culledGrassBuffer.SetCounterValue(0);
+        // Reset counters
+        culledGrassBufferLOD0.SetCounterValue(0);
+        culledGrassBufferLOD1.SetCounterValue(0);
 
         // Get frustum planes
         GeometryUtility.CalculateFrustumPlanes(mainCamera, cameraFrustumPlanes);
@@ -201,113 +207,140 @@ public class GrassRenderer : MonoBehaviour
 
         // Set culling parameters
         computeShader.SetBuffer(cullKernelIndex, "_SourceGrassBuffer", sourceGrassBuffer);
-        computeShader.SetBuffer(cullKernelIndex, "_CulledGrassBuffer", culledGrassBuffer);
+        computeShader.SetBuffer(cullKernelIndex, "_CulledGrassBufferLOD0", culledGrassBufferLOD0);
+        computeShader.SetBuffer(cullKernelIndex, "_CulledGrassBufferLOD1", culledGrassBufferLOD1);
         computeShader.SetFloats("_FrustumPlanes", frustumPlaneFloats);
         computeShader.SetInt("_GrassCount", grassCount);
+        // Optimization: Pass squared distances to avoid sqrt in shader
+        computeShader.SetFloat("_LOD0DistanceSq", lod0Distance * lod0Distance);
+        computeShader.SetFloat("_MaxDrawDistanceSq", maxDrawDistance * maxDrawDistance);
+        computeShader.SetVector("_CameraPosition", mainCamera.transform.position);
 
         // Dispatch culling
         int threadGroups = Mathf.CeilToInt((float)grassCount / threadGroupSize);
         computeShader.Dispatch(cullKernelIndex, threadGroups, 1, 1);
 
-        // Copy count to args buffer (index 1 is instance count, so offset is 4 bytes)
-        ComputeBuffer.CopyCount(culledGrassBuffer, argsBuffer, 4);
+        // Copy count to args buffers
+        ComputeBuffer.CopyCount(culledGrassBufferLOD0, argsBufferLOD0, 4);
+        ComputeBuffer.CopyCount(culledGrassBufferLOD1, argsBufferLOD1, 4);
 
         // Initialize MaterialPropertyBlocks if needed
         if (visualMPB == null) visualMPB = new MaterialPropertyBlock();
-        if (shadowMPB == null) shadowMPB = new MaterialPropertyBlock();
 
-        // 2. Render with culled buffer (for main camera view)
-        visualMPB.SetBuffer("_GrassDataBuffer", culledGrassBuffer);
-        
         // Update bounds to follow object
         renderBounds.center = transform.position;
 
+        // 2. Render LOD0 (High Quality)
+        visualMPB.SetBuffer("_GrassDataBuffer", culledGrassBufferLOD0);
         Graphics.DrawMeshInstancedIndirect(
-            grassMesh,
+            grassMeshLOD0,
             0,
             grassMaterial,
             renderBounds,
-            argsBuffer,
+            argsBufferLOD0,
             0,
             visualMPB,
-            UnityEngine.Rendering.ShadowCastingMode.Off, // Main render doesn't cast (shadow render does)
+            castShadows ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.Off,
             receiveShadows,
             0,
-            null // Render to all cameras (Scene View visibility)
+            null
         );
 
-        // 3. Render shadows using FULL source buffer (not culled)
-        // This ensures all grass casts shadows regardless of main camera frustum
-        if (castShadows)
-        {
-            // Use source buffer for shadows via MPB
-            shadowMPB.SetBuffer("_GrassDataBuffer", sourceGrassBuffer);
-
-            Graphics.DrawMeshInstancedIndirect(
-                grassMesh,
-                0,
-                grassMaterial,
-                renderBounds,
-                shadowArgsBuffer,
-                0,
-                shadowMPB,
-                UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly, // Only cast shadows, don't render
-                false,
-                0,
-                null // null = all cameras (shadow cameras)
-            );
-        }
+        // 3. Render LOD1 (Low Quality)
+        visualMPB.SetBuffer("_GrassDataBuffer", culledGrassBufferLOD1);
+        Graphics.DrawMeshInstancedIndirect(
+            grassMeshLOD1,
+            0,
+            grassMaterial,
+            renderBounds,
+            argsBufferLOD1,
+            0,
+            visualMPB,
+            (castShadows && castShadowsLOD1) ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.Off,
+            receiveShadows,
+            0,
+            null
+        );
     }
 
     /// <summary>
     /// Creates a simple grass blade mesh (quad that's thin and tall)
     /// </summary>
-    private Mesh CreateGrassBladeMesh()
+    private Mesh CreateGrassBladeMesh(int segments)
     {
         Mesh mesh = new Mesh();
         mesh.name = "GrassBlade";
 
-        // Create a simple quad for grass blade
-        float width = 0.05f;
+        // Validate segments
+        segments = Mathf.Max(1, segments);
+
         float height = 1f; // Will be scaled by grass height
+        float baseWidth = 0.05f; // Fixed base width, actual width controlled by shader
 
-        // Vertices - a simple quad with 4 vertices
-        Vector3[] vertices = new Vector3[]
+        // Vertices
+        // We have (segments) levels of quads, but the last one converges to a point.
+        // Levels 0 to segments-1 are pairs of vertices.
+        // Level segments is a single vertex (the tip).
+        // Total vertices: segments * 2 + 1
+        
+        int numVerts = segments * 2 + 1;
+        Vector3[] vertices = new Vector3[numVerts];
+        Vector2[] uvs = new Vector2[numVerts];
+        Vector3[] normals = new Vector3[numVerts];
+        
+        for (int i = 0; i < segments; i++)
         {
-            new Vector3(-width * 0.5f, 0, 0),      // Bottom left
-            new Vector3(width * 0.5f, 0, 0),       // Bottom right
-            new Vector3(-width * 0.3f, height * 0.5f, 0),  // Middle left (slightly narrower)
-            new Vector3(width * 0.3f, height * 0.5f, 0),   // Middle right
-            new Vector3(0, height, 0)              // Top (point)
-        };
-
-        // UVs
-        Vector2[] uvs = new Vector2[]
-        {
-            new Vector2(0, 0),
-            new Vector2(1, 0),
-            new Vector2(0.2f, 0.5f),
-            new Vector2(0.8f, 0.5f),
-            new Vector2(0.5f, 1)
-        };
-
-        // Normals (facing forward)
-        Vector3[] normals = new Vector3[]
-        {
-            Vector3.forward,
-            Vector3.forward,
-            Vector3.forward,
-            Vector3.forward,
-            Vector3.forward
-        };
-
+            float t = i / (float)segments; // 0 to almost 1
+            float y = t * height;
+            
+            // Taper width: starts at baseWidth, goes to 0 at top
+            // Using a slight curve for more organic look: width * (1 - t^2) or similar
+            // Let's stick to the previous look: slightly wider at bottom
+            float w = baseWidth * (1.0f - t); 
+            
+            // Left vertex
+            vertices[i * 2] = new Vector3(-w * 0.5f, y, 0);
+            uvs[i * 2] = new Vector2(0, t);
+            normals[i * 2] = Vector3.forward;
+            
+            // Right vertex
+            vertices[i * 2 + 1] = new Vector3(w * 0.5f, y, 0);
+            uvs[i * 2 + 1] = new Vector2(1, t);
+            normals[i * 2 + 1] = Vector3.forward;
+        }
+        
+        // Top vertex (Tip)
+        vertices[numVerts - 1] = new Vector3(0, height, 0);
+        uvs[numVerts - 1] = new Vector2(0.5f, 1);
+        normals[numVerts - 1] = Vector3.forward;
+        
         // Triangles
-        int[] triangles = new int[]
+        // (segments - 1) quads + 1 top triangle
+        // Each quad is 2 triangles (6 indices)
+        // Top triangle is 3 indices
+        int numTriangles = (segments - 1) * 2 + 1;
+        int[] triangles = new int[numTriangles * 3];
+        
+        int triIndex = 0;
+        for (int i = 0; i < segments - 1; i++)
         {
-            0, 2, 1,  // Bottom-left triangle
-            1, 2, 3,  // Bottom-right triangle
-            2, 4, 3   // Top triangle
-        };
+            int baseIndex = i * 2;
+            // Triangle 1
+            triangles[triIndex++] = baseIndex;
+            triangles[triIndex++] = baseIndex + 2;
+            triangles[triIndex++] = baseIndex + 1;
+            
+            // Triangle 2
+            triangles[triIndex++] = baseIndex + 1;
+            triangles[triIndex++] = baseIndex + 2;
+            triangles[triIndex++] = baseIndex + 3;
+        }
+        
+        // Top triangle
+        int lastBaseIndex = (segments - 1) * 2;
+        triangles[triIndex++] = lastBaseIndex;
+        triangles[triIndex++] = numVerts - 1; // Top tip
+        triangles[triIndex++] = lastBaseIndex + 1;
 
         mesh.vertices = vertices;
         mesh.uv = uvs;
@@ -323,18 +356,20 @@ public class GrassRenderer : MonoBehaviour
     {
         // Clean up compute buffers
         sourceGrassBuffer?.Release();
-        culledGrassBuffer?.Release();
-        argsBuffer?.Release();
-        shadowArgsBuffer?.Release();
+        culledGrassBufferLOD0?.Release();
+        culledGrassBufferLOD1?.Release();
+        argsBufferLOD0?.Release();
+        argsBufferLOD1?.Release();
     }
 
     private void OnDisable()
     {
         // Clean up compute buffers
         sourceGrassBuffer?.Release();
-        culledGrassBuffer?.Release();
-        argsBuffer?.Release();
-        shadowArgsBuffer?.Release();
+        culledGrassBufferLOD0?.Release();
+        culledGrassBufferLOD1?.Release();
+        argsBufferLOD0?.Release();
+        argsBufferLOD1?.Release();
     }
 
     // Editor helper to regenerate grass
@@ -352,7 +387,23 @@ public class GrassRenderer : MonoBehaviour
     // Gizmos for visualization in editor
     private void OnDrawGizmosSelected()
     {
-        Gizmos.color = new Color(0, 1, 0, 0.2f);
-        Gizmos.DrawWireCube(Vector3.zero, new Vector3(terrainSize, maxGrassHeight, terrainSize));
+        // Draw Bounds (Green)
+        Gizmos.color = new Color(0, 1, 0, 0.5f);
+        Gizmos.DrawWireCube(transform.position, new Vector3(terrainSize, maxGrassHeight, terrainSize));
+
+        // Draw LOD Ranges around the camera (if available)
+        Camera cam = mainCamera;
+        if (cam == null) cam = Camera.main;
+
+        if (cam != null)
+        {
+            // LOD0 Range (Yellow)
+            Gizmos.color = Color.yellow;
+            Gizmos.DrawWireSphere(cam.transform.position, lod0Distance);
+            
+            // Max Draw Distance (Red)
+            Gizmos.color = Color.red;
+            Gizmos.DrawWireSphere(cam.transform.position, maxDrawDistance);
+        }
     }
 }

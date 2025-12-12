@@ -19,9 +19,12 @@ RWStructuredBuffer<GrassData> grassDataBuffer;
 
 // Culling buffers
 StructuredBuffer<GrassData> _SourceGrassBuffer;
-AppendStructuredBuffer<GrassData> _CulledGrassBuffer;
+AppendStructuredBuffer<GrassData> _CulledGrassBufferLOD0;
+AppendStructuredBuffer<GrassData> _CulledGrassBufferLOD1;
 float4 _FrustumPlanes[6];
-float _MaxDrawDistance;
+float _MaxDrawDistanceSq;
+float _LOD0DistanceSq;
+float3 _CameraPosition;
 
 // Parameters
 float _TerrainSize;     // Size of the terrain
@@ -201,19 +204,23 @@ void CSCull(uint3 id : SV_DispatchThreadID)
     GrassData grass = _SourceGrassBuffer[id.x];
     float3 pos = grass.position;
 
-    // Distance Culling
-    // We assume camera is at (0,0,0) relative to the planes, but for distance we might need camera pos
-    // However, frustum culling implicitly handles distance if the far plane is set correctly.
-    // But often we want a specific grass draw distance shorter than the far plane.
-    // For now, let's stick to frustum culling.
+    // 1. Distance Check (Optimization: Check distance first to skip frustum calculations for far objects)
+    float3 diff = pos - _CameraPosition;
+    float distSq = dot(diff, diff);
+    
+    if (distSq > _MaxDrawDistanceSq)
+        return;
 
-    // Frustum Culling
+    // 2. Frustum Culling
     // Check a sphere around the grass blade
     // Center is at half height, radius is height
     float3 center = pos + float3(0, grass.height * 0.5, 0);
     float radius = grass.height; // Conservative radius
 
     bool visible = true;
+    
+    // Unroll loop for performance (though compiler usually does this)
+    [unroll]
     for (int i = 0; i < 6; i++)
     {
         float4 plane = _FrustumPlanes[i];
@@ -230,6 +237,14 @@ void CSCull(uint3 id : SV_DispatchThreadID)
 
     if (visible)
     {
-        _CulledGrassBuffer.Append(grass);
+        // LOD Selection based on squared distance
+        if (distSq < _LOD0DistanceSq)
+        {
+            _CulledGrassBufferLOD0.Append(grass);
+        }
+        else
+        {
+            _CulledGrassBufferLOD1.Append(grass);
+        }
     }
 }
