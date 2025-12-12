@@ -26,12 +26,6 @@ float _MaxDrawDistanceSq;
 float _LOD0DistanceSq;
 float3 _CameraPosition;
 
-// Occlusion Culling
-Texture2D<float> _DepthTexture;
-SamplerState sampler_DepthTexture;
-float4x4 _VPMatrix;
-bool _OcclusionCulling;
-
 // Parameters
 float _TerrainSize;     // Size of the terrain
 float3 _ObjectPosition; // World position of the grass renderer
@@ -238,43 +232,6 @@ void CSCull(uint3 id : SV_DispatchThreadID)
         {
             visible = false;
             break;
-        }
-    }
-
-    // 3. Occlusion Culling (Depth Buffer)
-    if (visible && _OcclusionCulling)
-    {
-        // Project world position to clip space
-        float4 clipPos = mul(_VPMatrix, float4(pos + float3(0, grass.height, 0), 1.0)); // Check tip of grass
-        
-        // Calculate NDC (Normalized Device Coordinates)
-        float3 ndc = clipPos.xyz / clipPos.w;
-        
-        // Calculate UV coordinates (0..1)
-        float2 uv = ndc.xy * 0.5 + 0.5;
-        
-        // Check if UV is within screen bounds
-        if (uv.x >= 0 && uv.x <= 1 && uv.y >= 0 && uv.y <= 1)
-        {
-            // Sample depth from texture
-            float depth = _DepthTexture.SampleLevel(sampler_DepthTexture, uv, 0);
-            
-            // Compare depth
-            // Note: This assumes Reverse Z (standard in Unity URP/HDRP on modern APIs)
-            // Near = 1.0, Far = 0.0
-            // ndc.z is the depth of our grass blade
-            
-            // If grass depth (ndc.z) is LESS than buffer depth, it means grass is FURTHER away (closer to 0)
-            // Therefore it is occluded by something closer (larger depth value)
-            // We add a small bias to prevent self-shadowing/flickering
-            
-            // Note: If using OpenGL (non-reverse Z), logic would be inverted. 
-            // For robustness, we assume Reverse Z here as it's the default for URP.
-            
-            if (ndc.z < depth - 0.0001) 
-            {
-                visible = false;
-            }
         }
     }
 
