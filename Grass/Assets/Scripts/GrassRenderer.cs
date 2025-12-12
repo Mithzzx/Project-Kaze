@@ -32,6 +32,7 @@ public class GrassRenderer : MonoBehaviour
     [Header("Rendering")]
     [SerializeField] private bool castShadows = true;
     [SerializeField] private bool castShadowsLOD1 = false; // Optimization: Disable shadows for far grass
+    [SerializeField] private bool occlusionCulling = true; // Occlusion Culling
     [SerializeField] private bool receiveShadows = true;
     [SerializeField] private Camera mainCamera;
 
@@ -215,6 +216,19 @@ public class GrassRenderer : MonoBehaviour
         computeShader.SetFloat("_LOD0DistanceSq", lod0Distance * lod0Distance);
         computeShader.SetFloat("_MaxDrawDistanceSq", maxDrawDistance * maxDrawDistance);
         computeShader.SetVector("_CameraPosition", mainCamera.transform.position);
+
+        // Occlusion Culling
+        if (occlusionCulling)
+        {
+            Matrix4x4 vp = GL.GetGPUProjectionMatrix(mainCamera.projectionMatrix, false) * mainCamera.worldToCameraMatrix;
+            computeShader.SetMatrix("_VPMatrix", vp);
+            computeShader.SetTexture(cullKernelIndex, "_DepthTexture", Shader.GetGlobalTexture("_CameraDepthTexture"));
+            computeShader.SetBool("_OcclusionCulling", true);
+        }
+        else
+        {
+            computeShader.SetBool("_OcclusionCulling", false);
+        }
 
         // Dispatch culling
         int threadGroups = Mathf.CeilToInt((float)grassCount / threadGroupSize);
