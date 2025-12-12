@@ -22,6 +22,7 @@ public class GrassRenderer : MonoBehaviour
     [Header("References")]
     [SerializeField] private ComputeShader computeShader;
     [SerializeField] private Material grassMaterial;
+    [SerializeField] private Terrain terrain; // Added Terrain reference
     private Mesh grassMesh;
 
     [Header("Rendering")]
@@ -35,6 +36,10 @@ public class GrassRenderer : MonoBehaviour
     
     // Indirect arguments buffer for DrawMeshInstancedIndirect
     private ComputeBuffer argsBuffer;
+    private ComputeBuffer shadowArgsBuffer;
+
+    private MaterialPropertyBlock visualMPB;
+    private MaterialPropertyBlock shadowMPB;
     
     // Grass data structure - must match compute shader
     private struct GrassData
@@ -107,6 +112,17 @@ public class GrassRenderer : MonoBehaviour
         argsBuffer = new ComputeBuffer(1, args.Length * sizeof(uint), ComputeBufferType.IndirectArguments);
         argsBuffer.SetData(args);
 
+        // Create shadow args buffer (static count)
+        uint[] shadowArgs = new uint[5];
+        shadowArgs[0] = grassMesh.GetIndexCount(0);
+        shadowArgs[1] = (uint)grassCount; // Full count, not culled
+        shadowArgs[2] = grassMesh.GetIndexStart(0);
+        shadowArgs[3] = grassMesh.GetBaseVertex(0);
+        shadowArgs[4] = 0;
+
+        shadowArgsBuffer = new ComputeBuffer(1, shadowArgs.Length * sizeof(uint), ComputeBufferType.IndirectArguments);
+        shadowArgsBuffer.SetData(shadowArgs);
+
         // Set render bounds (large enough to contain all grass)
         renderBounds = new Bounds(Vector3.zero, Vector3.one * terrainSize * 2);
 
@@ -122,6 +138,7 @@ public class GrassRenderer : MonoBehaviour
 
         // Set compute shader parameters
         computeShader.SetBuffer(kernelIndex, "grassDataBuffer", sourceGrassBuffer);
+        computeShader.SetVector("_ObjectPosition", transform.position); // Pass object position
         computeShader.SetFloat("_TerrainSize", terrainSize);
         computeShader.SetFloat("_MinHeight", minGrassHeight);
         computeShader.SetFloat("_MaxHeight", maxGrassHeight);
@@ -135,6 +152,14 @@ public class GrassRenderer : MonoBehaviour
         computeShader.SetFloat("_HeightScale", heightScale);
         computeShader.SetFloat("_HeightFactor", heightFactor);
         computeShader.SetFloat("_AngleVariation", angleVariation);
+
+        // Terrain Integration
+        if (terrain != null)
+        {
+            computeShader.SetTexture(kernelIndex, "_HeightMap", terrain.terrainData.heightmapTexture);
+            computeShader.SetVector("_TerrainSizeData", terrain.terrainData.size);
+            computeShader.SetVector("_TerrainPos", terrain.transform.position);
+        }
 
         // Calculate thread groups needed
         int threadGroups = Mathf.CeilToInt((float)grassCount / threadGroupSize);
@@ -187,10 +212,16 @@ public class GrassRenderer : MonoBehaviour
         // Copy count to args buffer (index 1 is instance count, so offset is 4 bytes)
         ComputeBuffer.CopyCount(culledGrassBuffer, argsBuffer, 4);
 
-        // Set the culled buffer on the material for main camera rendering
-        grassMaterial.SetBuffer("_GrassDataBuffer", culledGrassBuffer);
+        // Initialize MaterialPropertyBlocks if needed
+        if (visualMPB == null) visualMPB = new MaterialPropertyBlock();
+        if (shadowMPB == null) shadowMPB = new MaterialPropertyBlock();
 
         // 2. Render with culled buffer (for main camera view)
+        visualMPB.SetBuffer("_GrassDataBuffer", culledGrassBuffer);
+        
+        // Update bounds to follow object
+        renderBounds.center = transform.position;
+
         Graphics.DrawMeshInstancedIndirect(
             grassMesh,
             0,
@@ -198,45 +229,33 @@ public class GrassRenderer : MonoBehaviour
             renderBounds,
             argsBuffer,
             0,
-            null,
+            visualMPB,
             UnityEngine.Rendering.ShadowCastingMode.Off, // Main render doesn't cast (shadow render does)
             receiveShadows,
             0,
-            mainCamera // Only main camera uses culled buffer
+            null // Render to all cameras (Scene View visibility)
         );
 
         // 3. Render shadows using FULL source buffer (not culled)
         // This ensures all grass casts shadows regardless of main camera frustum
         if (castShadows)
         {
-            // Create args for full grass count
-            uint[] shadowArgs = new uint[5];
-            shadowArgs[0] = grassMesh.GetIndexCount(0);
-            shadowArgs[1] = (uint)grassCount; // Full count, not culled
-            shadowArgs[2] = grassMesh.GetIndexStart(0);
-            shadowArgs[3] = grassMesh.GetBaseVertex(0);
-            shadowArgs[4] = 0;
-            argsBuffer.SetData(shadowArgs);
-
-            // Use source buffer for shadows
-            grassMaterial.SetBuffer("_GrassDataBuffer", sourceGrassBuffer);
+            // Use source buffer for shadows via MPB
+            shadowMPB.SetBuffer("_GrassDataBuffer", sourceGrassBuffer);
 
             Graphics.DrawMeshInstancedIndirect(
                 grassMesh,
                 0,
                 grassMaterial,
                 renderBounds,
-                argsBuffer,
+                shadowArgsBuffer,
                 0,
-                null,
+                shadowMPB,
                 UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly, // Only cast shadows, don't render
                 false,
                 0,
                 null // null = all cameras (shadow cameras)
             );
-
-            // Restore culled buffer for next frame
-            grassMaterial.SetBuffer("_GrassDataBuffer", culledGrassBuffer);
         }
     }
 
@@ -306,6 +325,7 @@ public class GrassRenderer : MonoBehaviour
         sourceGrassBuffer?.Release();
         culledGrassBuffer?.Release();
         argsBuffer?.Release();
+        shadowArgsBuffer?.Release();
     }
 
     private void OnDisable()
@@ -314,6 +334,7 @@ public class GrassRenderer : MonoBehaviour
         sourceGrassBuffer?.Release();
         culledGrassBuffer?.Release();
         argsBuffer?.Release();
+        shadowArgsBuffer?.Release();
     }
 
     // Editor helper to regenerate grass

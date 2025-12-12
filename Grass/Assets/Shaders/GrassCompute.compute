@@ -25,6 +25,7 @@ float _MaxDrawDistance;
 
 // Parameters
 float _TerrainSize;     // Size of the terrain
+float3 _ObjectPosition; // World position of the grass renderer
 float _MinHeight;       // Minimum grass height
 float _MaxHeight;       // Maximum grass height
 float _Time;            // Time
@@ -37,6 +38,12 @@ float _ClumpStrength;   // How strongly grass is pushed into clumps
 float _HeightScale;     // Scale of the noise for height variation
 float _HeightFactor;    // Minimum height multiplier (0.0 = gaps, 1.0 = uniform)
 float _AngleVariation;  // Control the range of random rotation (0.0 = aligned, 1.0 = full random)
+
+// Terrain Integration
+Texture2D<float4> _HeightMap;
+SamplerState sampler_HeightMap;
+float4 _TerrainSizeData; // x = width, y = height, z = length
+float3 _TerrainPos;
 
 // --- NOISE FUNCTIONS ---
 
@@ -139,7 +146,30 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     
     // 5. Final Data Assembly
     GrassData grass;
-    grass.position = float3(finalPos2D.x, 0.0, finalPos2D.y);
+    
+    // Calculate World Position
+    // finalPos2D is local to the patch (centered at 0)
+    // We add _ObjectPosition to place it in the world
+    float3 worldPos = float3(finalPos2D.x, 0, finalPos2D.y) + _ObjectPosition;
+    
+    // Terrain Height Sampling
+    float terrainHeight = _ObjectPosition.y; // Default to object height
+    
+    // Check if we have a valid terrain size (avoid divide by zero)
+    if (_TerrainSizeData.x > 0)
+    {
+        float2 uv = (worldPos.xz - _TerrainPos.xz) / _TerrainSizeData.xz;
+        
+        // Check if inside terrain bounds
+        if (uv.x >= 0 && uv.x <= 1 && uv.y >= 0 && uv.y <= 1)
+        {
+            // Sample height (R channel usually holds height)
+            float h = _HeightMap.SampleLevel(sampler_HeightMap, uv, 0).r;
+            terrainHeight = _TerrainPos.y + h * _TerrainSizeData.y * 2.0;
+        }
+    }
+    
+    grass.position = float3(worldPos.x, terrainHeight, worldPos.z);
     
     // Randomize height slightly per blade, but respect the clump height
     // Use basePos for seed to avoid precision issues with large IDs
