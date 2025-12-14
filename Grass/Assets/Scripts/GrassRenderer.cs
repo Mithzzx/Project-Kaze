@@ -35,6 +35,12 @@ public class GrassRenderer : MonoBehaviour
     [SerializeField] private bool receiveShadows = true;
     [SerializeField] private Camera mainCamera;
 
+    [Header("Occlusion Culling")]
+    [SerializeField] private bool enableOcclusionCulling = true;
+    [SerializeField, Range(0.001f, 0.1f)] private float occlusionBias = 0.01f;
+    [SerializeField] private bool showHiZDebug = false;
+    [SerializeField, Range(0, 9)] private int debugMipLevel = 0;
+
     // Compute buffer to hold grass data
     private ComputeBuffer sourceGrassBuffer;
     private ComputeBuffer culledGrassBufferLOD0;
@@ -66,6 +72,9 @@ public class GrassRenderer : MonoBehaviour
     private Plane[] cameraFrustumPlanes = new Plane[6];
     private float[] frustumPlaneFloats = new float[24]; // 6 planes * 4 floats
     private bool needsUpdate = false;
+    
+    // Dummy texture for when occlusion is disabled (compute shaders require all textures to be bound)
+    private RenderTexture dummyHiZTexture;
 
     private void OnValidate()
     {
@@ -83,12 +92,36 @@ public class GrassRenderer : MonoBehaviour
             enabled = false;
             return;
         }
+        
         // Create grass mesh
         grassMeshLOD0 = CreateGrassBladeMesh(bladeSegments);
         grassMeshLOD1 = CreateGrassBladeMesh(1); // Low quality mesh (1 segment = 1 quad + tip)
 
+        // Create dummy Hi-Z texture for when occlusion is disabled
+        CreateDummyHiZTexture();
+
         InitializeBuffers();
         DispatchComputeShader();
+    }
+    
+    private void CreateDummyHiZTexture()
+    {
+        if (dummyHiZTexture != null) return;
+        
+        dummyHiZTexture = new RenderTexture(1, 1, 0, RenderTextureFormat.RFloat);
+        dummyHiZTexture.enableRandomWrite = true;
+        dummyHiZTexture.Create();
+        dummyHiZTexture.name = "DummyHiZTexture";
+    }
+    
+    private void BindDummyHiZTexture()
+    {
+        if (dummyHiZTexture == null) CreateDummyHiZTexture();
+        computeShader.SetTexture(cullKernelIndex, "_HiZTexture", dummyHiZTexture);
+        computeShader.SetVector("_ScreenSize", new Vector2(1, 1));
+        computeShader.SetInt("_HiZMipLevels", 1);
+        computeShader.SetFloat("_OcclusionBias", 0);
+        computeShader.SetMatrix("_ViewProjectionMatrix", Matrix4x4.identity);
     }
 
     private void InitializeBuffers()
@@ -215,6 +248,39 @@ public class GrassRenderer : MonoBehaviour
         computeShader.SetFloat("_LOD0DistanceSq", lod0Distance * lod0Distance);
         computeShader.SetFloat("_MaxDrawDistanceSq", maxDrawDistance * maxDrawDistance);
         computeShader.SetVector("_CameraPosition", mainCamera.transform.position);
+
+        // Hi-Z Occlusion Culling parameters using the new Renderer Feature
+        bool useOcclusion = enableOcclusionCulling && HiZRendererFeature.IsValid;
+        computeShader.SetInt("_EnableOcclusionCulling", useOcclusion ? 1 : 0);
+        
+        // Always bind a texture (compute shaders require all textures to be bound)
+        if (useOcclusion)
+        {
+            // Pass Hi-Z texture from the renderer feature
+            RenderTexture hiZTex = HiZRendererFeature.HiZTexture;
+            if (hiZTex != null)
+            {
+                computeShader.SetTexture(cullKernelIndex, "_HiZTexture", hiZTex);
+                
+                // Pass view-projection matrix for screen-space projection
+                computeShader.SetMatrix("_ViewProjectionMatrix", HiZRendererFeature.ViewProjectionMatrix);
+                
+                // Pass screen size and mip levels
+                computeShader.SetVector("_ScreenSize", HiZRendererFeature.ScreenSize);
+                computeShader.SetInt("_HiZMipLevels", HiZRendererFeature.MipLevels);
+                computeShader.SetFloat("_OcclusionBias", occlusionBias);
+            }
+            else
+            {
+                computeShader.SetInt("_EnableOcclusionCulling", 0);
+                BindDummyHiZTexture();
+            }
+        }
+        else
+        {
+            // Bind dummy texture when occlusion is disabled
+            BindDummyHiZTexture();
+        }
 
         // Dispatch culling
         int threadGroups = Mathf.CeilToInt((float)grassCount / threadGroupSize);
@@ -360,6 +426,13 @@ public class GrassRenderer : MonoBehaviour
         culledGrassBufferLOD1?.Release();
         argsBufferLOD0?.Release();
         argsBufferLOD1?.Release();
+        
+        // Clean up dummy texture
+        if (dummyHiZTexture != null)
+        {
+            dummyHiZTexture.Release();
+            dummyHiZTexture = null;
+        }
     }
 
     private void OnDisable()
@@ -381,6 +454,128 @@ public class GrassRenderer : MonoBehaviour
             OnDestroy();
             InitializeBuffers();
             DispatchComputeShader();
+        }
+    }
+
+    // Debug stats
+    private uint[] debugArgs = new uint[5];
+    private Material hiZDebugMaterial;
+    private RenderTexture debugRenderTarget;
+    
+    private void OnGUI()
+    {
+        if (!Application.isPlaying) return;
+        
+        // Show grass count stats
+        if (argsBufferLOD0 != null)
+        {
+            argsBufferLOD0.GetData(debugArgs);
+            uint lod0Count = debugArgs[1];
+            
+            if (argsBufferLOD1 != null)
+            {
+                argsBufferLOD1.GetData(debugArgs);
+                uint lod1Count = debugArgs[1];
+                
+                bool occlusionActive = enableOcclusionCulling && HiZRendererFeature.IsValid;
+                string occlusionStatus = occlusionActive ? "ON" : "OFF";
+                string hiZStatus = HiZRendererFeature.IsValid ? 
+                    $"Valid ({HiZRendererFeature.HiZSize}x{HiZRendererFeature.HiZSize}, {HiZRendererFeature.MipLevels} mips)" : 
+                    $"INVALID (Tex: {(HiZRendererFeature.HiZTexture != null ? "exists" : "null")}, Mips: {HiZRendererFeature.MipLevels})";
+                
+                float cullPercent = grassCount > 0 ? (1.0f - (float)(lod0Count + lod1Count) / grassCount) * 100f : 0;
+                
+                GUI.Label(new Rect(10, Screen.height - 130, 500, 120), 
+                    $"Grass Stats:\n" +
+                    $"LOD0: {lod0Count:N0} | LOD1: {lod1Count:N0} | Total: {lod0Count + lod1Count:N0}\n" +
+                    $"Source: {grassCount:N0} | Culled: {cullPercent:F1}%\n" +
+                    $"Occlusion: {occlusionStatus} | Bias: {occlusionBias}\n" +
+                    $"Hi-Z: {hiZStatus}");
+            }
+        }
+        
+        // Draw Hi-Z debug textures
+        if (showHiZDebug)
+        {
+            int previewSize = 200;
+            int margin = 10;
+            int yOffset = 10;
+            
+            // Create debug material if needed
+            if (hiZDebugMaterial == null)
+            {
+                Shader debugShader = Shader.Find("Hidden/HiZDebug");
+                if (debugShader != null)
+                {
+                    hiZDebugMaterial = new Material(debugShader);
+                    hiZDebugMaterial.hideFlags = HideFlags.HideAndDontSave;
+                }
+                else
+                {
+                    Debug.LogWarning("[Hi-Z Debug] Could not find Hidden/HiZDebug shader");
+                }
+            }
+            
+            // Draw Hi-Z texture
+            if (HiZRendererFeature.HiZTexture != null)
+            {
+                RenderTexture hiZ = HiZRendererFeature.HiZTexture;
+                
+                // Background box for main preview
+                GUI.Box(new Rect(Screen.width - previewSize - margin, yOffset, previewSize + margin, previewSize + 30), "");
+                
+                // Draw Hi-Z at selected mip level
+                Rect mainRect = new Rect(Screen.width - previewSize - margin/2, yOffset + 5, previewSize, previewSize);
+                
+                if (hiZDebugMaterial != null)
+                {
+                    hiZDebugMaterial.SetFloat("_MipLevel", debugMipLevel);
+                    hiZDebugMaterial.SetFloat("_DepthScale", 1.0f);
+                    Graphics.DrawTexture(mainRect, hiZ, hiZDebugMaterial);
+                }
+                else
+                {
+                    // Fallback: just draw the texture directly
+                    GUI.DrawTexture(mainRect, hiZ, ScaleMode.ScaleToFit);
+                }
+                
+                int mipDim = Mathf.Max(1, hiZ.width >> debugMipLevel);
+                GUI.Label(new Rect(Screen.width - previewSize - margin/2, yOffset + previewSize + 5, previewSize, 25), 
+                    $"Hi-Z Mip {debugMipLevel} ({mipDim}x{mipDim})");
+                
+                yOffset += previewSize + 40;
+                
+                // Draw first 3 mip levels for comparison
+                int smallSize = 100;
+                int numMips = Mathf.Min(3, HiZRendererFeature.MipLevels);
+                GUI.Box(new Rect(Screen.width - (smallSize + margin) * numMips - margin, yOffset, (smallSize + margin) * numMips + margin, smallSize + 30), "");
+                
+                for (int mip = 0; mip < numMips; mip++)
+                {
+                    int xPos = Screen.width - (smallSize + margin) * (numMips - mip) - margin/2;
+                    Rect mipRect = new Rect(xPos, yOffset + 5, smallSize, smallSize);
+                    
+                    if (hiZDebugMaterial != null)
+                    {
+                        hiZDebugMaterial.SetFloat("_MipLevel", mip);
+                        Graphics.DrawTexture(mipRect, hiZ, hiZDebugMaterial);
+                    }
+                    else
+                    {
+                        GUI.DrawTexture(mipRect, hiZ, ScaleMode.ScaleToFit);
+                    }
+                    
+                    int dim = Mathf.Max(1, hiZ.width >> mip);
+                    GUI.Label(new Rect(xPos, yOffset + smallSize + 5, smallSize, 20), $"Mip {mip} ({dim})");
+                }
+            }
+            else
+            {
+                // Show message when Hi-Z texture is null
+                GUI.Box(new Rect(Screen.width - previewSize - margin, yOffset, previewSize + margin, 70), "");
+                GUI.Label(new Rect(Screen.width - previewSize - margin/2, yOffset + 10, previewSize, 50), 
+                    "Hi-Z Texture: NULL\n\nCheck HiZRendererFeature\nis added to your Renderer");
+            }
         }
     }
 

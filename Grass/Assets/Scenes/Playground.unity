@@ -3819,7 +3819,7 @@ MonoBehaviour:
   maxGrassHeight: 1
   bladeSegments: 5
   lod0Distance: 30
-  maxDrawDistance: 250
+  maxDrawDistance: 120
   clumpScale: 0.05
   clumpStrength: 1
   heightScale: 0.05
@@ -3832,6 +3832,10 @@ MonoBehaviour:
   castShadowsLOD1: 0
   receiveShadows: 1
   mainCamera: {fileID: 905988804}
+  enableOcclusionCulling: 1
+  occlusionBias: 0.048
+  showHiZDebug: 1
+  debugMipLevel: 3
 --- !u!4 &1198554289
 Transform:
   m_ObjectHideFlags: 0

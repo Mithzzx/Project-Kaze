@@ -1,0 +1,59 @@
+// Hi-Z Pyramid Generator for Unity 6 Render Graph
+// Creates a hierarchical depth buffer (mip chain) for occlusion culling
+// Based on GPU-Driven Rendering Pipelines (SIGGRAPH 2015)
+
+#pragma kernel CopyDepth
+#pragma kernel ReduceDepth
+
+// Textures
+Texture2D<float> _InputDepth;   // Source (Read Only)
+RWTexture2D<float> _OutputHiZ;  // Destination (Write)
+
+// Point Clamp sampler for exact pixel reads
+SamplerState sampler_PointClamp;
+
+// Uniforms
+float4 _OutputSize; // x: width, y: height, z: 1/width, w: 1/height
+
+// ------------------------------------------------------------------
+// KERNEL 0: COPY (Depth Buffer -> Hi-Z Mip 0)
+// Uses Load() to bypass sampling issues entirely
+// ------------------------------------------------------------------
+[numthreads(8, 8, 1)]
+void CopyDepth(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_OutputSize.x || id.y >= (uint)_OutputSize.y)
+        return;
+
+    // Use LOAD (integer coords) to read exact pixels from Mip 0
+    float depth = _InputDepth.Load(int3(id.x, id.y, 0));
+
+    // Write directly to Hi-Z Mip 0
+    _OutputHiZ[id.xy] = depth;
+}
+
+// ------------------------------------------------------------------
+// KERNEL 1: REDUCE (Downsample with MIN for Reverse-Z)
+// Uses Gather for efficient 4-pixel sampling
+// ------------------------------------------------------------------
+[numthreads(8, 8, 1)]
+void ReduceDepth(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_OutputSize.x || id.y >= (uint)_OutputSize.y)
+        return;
+
+    // Calculate UV for the center of the output pixel
+    float2 uv = (id.xy + 0.5) * _OutputSize.zw;
+
+    // Gather samples 4 pixels at once (more efficient than 4 separate loads)
+    // Returns .x=(-1,-1), .y=(1,-1), .z=(1,1), .w=(-1,1) relative to uv
+    float4 depths = _InputDepth.Gather(sampler_PointClamp, uv);
+
+    // REVERSE-Z LOGIC (Unity Standard)
+    // 1.0 = Near, 0.0 = Far
+    // For conservative occlusion culling, we want the FURTHEST point
+    // In Reverse-Z, furthest is the MINIMUM value
+    float minDepth = min(min(depths.x, depths.y), min(depths.z, depths.w));
+    
+    _OutputHiZ[id.xy] = minDepth;
+}
