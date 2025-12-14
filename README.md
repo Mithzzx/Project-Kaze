@@ -2,7 +2,7 @@
 
 A high-performance, procedurally generated grass rendering system built in Unity (URP). This project demonstrates advanced graphics programming techniques including Compute Shaders, GPU Instancing, and Indirect Drawing to render millions of interactive grass blades with minimal CPU overhead.
 
-https://github.com/Mithzzx/Project-Kaze/raw/main/Grass/Documentation/Screen%20Recording.MP4
+https://github.com/user-attachments/assets/2876c3d9-c35a-4ef4-ac0a-b6a01555790c
 
 ---
 
@@ -82,9 +82,6 @@ The project includes a **Skybox Switcher** to demonstrate the grass under differ
 *   Universal Render Pipeline (URP)
 *   Input System Package
 
----
-
-## 🚀 Performance Optimizations
 
 *   **Squared Distance Checks**: Avoids expensive `sqrt` operations in the shader.
 *   **Early Exit Culling**: Skips frustum calculations for objects beyond the max draw distance.
