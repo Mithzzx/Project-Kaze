@@ -2,9 +2,7 @@
 
 A high-performance, procedurally generated grass rendering system built in Unity (URP). This project demonstrates advanced graphics programming techniques including Compute Shaders, GPU Instancing, and Indirect Drawing to render millions of interactive grass blades with minimal CPU overhead.
 
-https://github.com/user-attachments/assets/Screen%20Recording.MP4
-
-<video src="Grass/Documentation/Screen%20Recording.MP4" controls width="100%"></video>
+https://github.com/Mithzzx/Project-Kaze/raw/main/Grass/Documentation/Screen%20Recording.MP4
 
 ---
 
