@@ -26,15 +26,6 @@ float _MaxDrawDistanceSq;
 float _LOD0DistanceSq;
 float3 _CameraPosition;
 
-// Hi-Z Occlusion Culling
-Texture2D<float> _HiZTexture;
-SamplerState sampler_HiZTexture;
-float4x4 _ViewProjectionMatrix;
-float2 _ScreenSize;
-int _HiZMipLevels;
-float _OcclusionBias;
-int _EnableOcclusionCulling;
-
 // Parameters
 float _TerrainSize;     // Size of the terrain
 float3 _ObjectPosition; // World position of the grass renderer
@@ -204,50 +195,6 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     grassDataBuffer[id.x] = grass;
 }
 
-// Hi-Z occlusion test helper function
-// Returns true if the object is visible (not occluded)
-bool HiZOcclusionTest(float3 worldPos, float objectHeight)
-{
-    // Project world position to clip space
-    float4 clipPos = mul(_ViewProjectionMatrix, float4(worldPos, 1.0));
-    
-    // Check if behind camera
-    if (clipPos.w <= 0.0)
-        return false;
-    
-    // Perspective divide to get NDC
-    float3 ndc = clipPos.xyz / clipPos.w;
-    
-    // Check if outside screen bounds (let frustum culling handle it)
-    if (any(abs(ndc.xy) > 1.0))
-        return true;
-    
-    // Convert NDC to UV (0-1 range)
-    float2 screenUV = ndc.xy * 0.5 + 0.5;
-    
-    // Sample Hi-Z buffer at mip 0 (full resolution)
-    uint2 pixelCoord = uint2(screenUV * _ScreenSize);
-    pixelCoord = clamp(pixelCoord, uint2(0, 0), uint2(_ScreenSize) - 1);
-    
-    float occluderDepth = _HiZTexture.Load(int3(pixelCoord, 0));
-    
-    // Object depth from NDC z
-    float objectDepth = ndc.z;
-    
-    // Unity Reverse-Z: 1 = near, 0 = far
-    // Hi-Z stores MIN (furthest depth in reverse-Z = smallest value)
-    // 
-    // Object is VISIBLE if:
-    //   - objectDepth >= occluderDepth (object is closer or same as occluder)
-    //   - In reverse-Z: higher value = closer to camera
-    //
-    // Object is OCCLUDED if:
-    //   - objectDepth < occluderDepth (object is behind the occluder)
-    //
-    // Add bias to handle grass sitting ON terrain surface
-    return objectDepth >= (occluderDepth - _OcclusionBias);
-}
-
 [numthreads(256, 1, 1)]
 void CSCull(uint3 id : SV_DispatchThreadID)
 {
@@ -285,22 +232,6 @@ void CSCull(uint3 id : SV_DispatchThreadID)
         {
             visible = false;
             break;
-        }
-    }
-    
-    // 3. Hi-Z Occlusion Culling (only if enabled and visible so far)
-    if (visible && _EnableOcclusionCulling > 0)
-    {
-        // Test the base position of the grass blade
-        // Using base position is more conservative (grass may stick up above occluders)
-        visible = HiZOcclusionTest(pos, grass.height);
-        
-        // Optional: If base is occluded, also test the tip for tall grass
-        // This prevents popping when grass tips should be visible above occluders
-        if (!visible && grass.height > 0.5)
-        {
-            float3 tipPos = pos + float3(0, grass.height, 0);
-            visible = HiZOcclusionTest(tipPos, grass.height * 0.5);
         }
     }
 
