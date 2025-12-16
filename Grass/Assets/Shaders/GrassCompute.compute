@@ -48,6 +48,11 @@ SamplerState sampler_HeightMap;
 float4 _TerrainSizeData; // x = width, y = height, z = length
 float3 _TerrainPos;
 
+// Grass Mask for Painting
+Texture2D<float4> _GrassMask;
+SamplerState sampler_GrassMask;
+int _UseGrassMask;
+
 // --- NOISE FUNCTIONS ---
 
 // Hash function
@@ -157,11 +162,13 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     
     // Terrain Height Sampling
     float terrainHeight = _ObjectPosition.y; // Default to object height
+    float2 terrainUV = float2(0.5, 0.5); // Default UV for mask sampling
     
     // Check if we have a valid terrain size (avoid divide by zero)
     if (_TerrainSizeData.x > 0)
     {
         float2 uv = (worldPos.xz - _TerrainPos.xz) / _TerrainSizeData.xz;
+        terrainUV = uv;
         
         // Check if inside terrain bounds
         if (uv.x >= 0 && uv.x <= 1 && uv.y >= 0 && uv.y <= 1)
@@ -169,6 +176,36 @@ void CSMain(uint3 id : SV_DispatchThreadID)
             // Sample height (R channel usually holds height)
             float h = _HeightMap.SampleLevel(sampler_HeightMap, uv, 0).r;
             terrainHeight = _TerrainPos.y + h * _TerrainSizeData.y * 2.0;
+        }
+    }
+    else
+    {
+        // Fallback UV calculation for non-terrain mode
+        terrainUV = (finalPos2D + _TerrainSize * 0.5) / _TerrainSize;
+    }
+    
+    // Grass Mask Sampling
+    float grassDensity = 1.0;
+    if (_UseGrassMask > 0)
+    {
+        grassDensity = _GrassMask.SampleLevel(sampler_GrassMask, terrainUV, 0).r;
+        
+        // Use density as a probability threshold
+        // Compare with a pseudo-random value based on position
+        float randomThreshold = hash12(basePos * 7.89 + 12.34);
+        
+        // If random value is above density, skip this grass blade
+        if (randomThreshold > grassDensity)
+        {
+            // Set height to 0 to effectively hide this grass blade
+            GrassData emptyGrass;
+            emptyGrass.position = float3(0, -1000, 0); // Place far below to be culled
+            emptyGrass.height = 0;
+            emptyGrass.facing = float2(1, 0);
+            emptyGrass.windPhase = 0;
+            emptyGrass.stiffness = 1;
+            grassDataBuffer[id.x] = emptyGrass;
+            return;
         }
     }
     

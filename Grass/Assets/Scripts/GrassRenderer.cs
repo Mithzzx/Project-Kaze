@@ -26,6 +26,7 @@ public class GrassRenderer : MonoBehaviour
     [SerializeField] private ComputeShader computeShader;
     [SerializeField] private Material grassMaterial;
     [SerializeField] private Terrain terrain; // Added Terrain reference
+    [SerializeField] private GrassPaintMask grassMask; // Grass density mask for painting
     private Mesh grassMeshLOD0;
     private Mesh grassMeshLOD1;
 
@@ -164,6 +165,17 @@ public class GrassRenderer : MonoBehaviour
             computeShader.SetTexture(kernelIndex, "_HeightMap", terrain.terrainData.heightmapTexture);
             computeShader.SetVector("_TerrainSizeData", terrain.terrainData.size);
             computeShader.SetVector("_TerrainPos", terrain.transform.position);
+        }
+
+        // Grass Mask Integration
+        if (grassMask != null && grassMask.MaskTexture != null)
+        {
+            computeShader.SetTexture(kernelIndex, "_GrassMask", grassMask.MaskTexture);
+            computeShader.SetInt("_UseGrassMask", 1);
+        }
+        else
+        {
+            computeShader.SetInt("_UseGrassMask", 0);
         }
 
         // Calculate thread groups needed
@@ -381,6 +393,42 @@ public class GrassRenderer : MonoBehaviour
             OnDestroy();
             InitializeBuffers();
             DispatchComputeShader();
+        }
+    }
+
+    /// <summary>
+    /// Refreshes the grass positions. Called by the painting tool.
+    /// Works in both editor and play mode.
+    /// </summary>
+    public void RefreshGrass()
+    {
+        if (Application.isPlaying && sourceGrassBuffer != null)
+        {
+            DispatchComputeShader();
+        }
+        #if UNITY_EDITOR
+        else
+        {
+            // Mark as needing update for when play mode starts
+            needsUpdate = true;
+            UnityEditor.EditorUtility.SetDirty(this);
+        }
+        #endif
+    }
+
+    /// <summary>
+    /// Gets or sets the grass paint mask.
+    /// </summary>
+    public GrassPaintMask GrassMask
+    {
+        get => grassMask;
+        set
+        {
+            grassMask = value;
+            if (Application.isPlaying && sourceGrassBuffer != null)
+            {
+                DispatchComputeShader();
+            }
         }
     }
 
