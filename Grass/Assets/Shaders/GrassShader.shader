@@ -15,6 +15,7 @@ Shader "Custom/GrassShader"
         _BladeWidth ("Blade Width", Float) = 0.05
         _BladeHeight ("Blade Height Multiplier", Float) = 1.0
         _BladeBend ("Blade Bend (Natural Curve)", Range(0, 1)) = 0.3
+        _CameraFacing ("Camera Facing Strength", Range(0, 1)) = 0.0
         
         [Header(Wind)]
         _WindMap ("Wind Noise Texture", 2D) = "white" {}
@@ -78,6 +79,7 @@ Shader "Custom/GrassShader"
             float _BladeWidth;
             float _BladeHeight;
             float _BladeBend;
+            float _CameraFacing;
             float _WindFrequency;
             float _WindGustStrength;
             float _WindFlutterStrength;
@@ -170,6 +172,16 @@ Shader "Custom/GrassShader"
             
             // Rotate wind to Object Space
             float2 facing = grass.facing;
+
+            // Camera Facing Logic
+            if (_CameraFacing > 0.0)
+            {
+                float3 viewDir = _WorldSpaceCameraPos - worldPos;
+                float2 viewDirXZ = normalize(viewDir.xz);
+                // Blend between original facing and camera facing
+                facing = normalize(lerp(facing, viewDirXZ, _CameraFacing));
+            }
+
             float3 right = float3(facing.y, 0, -facing.x);
             float3 forward = float3(facing.x, 0, facing.y);
             
@@ -229,6 +241,16 @@ Shader "Custom/GrassShader"
                 GrassData grass = _GrassDataBuffer[unity_InstanceID];
                 
                 float2 facing = grass.facing;
+
+                // Camera Facing Logic
+                if (_CameraFacing > 0.0)
+                {
+                    float3 viewDir = _WorldSpaceCameraPos - grass.position;
+                    float2 viewDirXZ = normalize(viewDir.xz);
+                    // Blend between original facing and camera facing
+                    facing = normalize(lerp(facing, viewDirXZ, _CameraFacing));
+                }
+
                 float3 right = float3(facing.y, 0, -facing.x);
                 float3 up = float3(0, 1, 0);
                 float3 forward = float3(facing.x, 0, facing.y);

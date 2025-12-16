@@ -32,6 +32,7 @@ public class GrassRenderer : MonoBehaviour
     [SerializeField] private float heightScale = 0.05f;
     [SerializeField] private float heightFactor = 0.5f;
     [SerializeField, Range(0, 1)] private float angleVariation = 1.0f;
+    [SerializeField, Range(0, 1)] private float cameraFacing = 0.0f; // How much grass faces the camera
 
     [Header("References")]
     [SerializeField] private ComputeShader computeShader;
@@ -322,6 +323,7 @@ public class GrassRenderer : MonoBehaviour
         
         // Update material properties every frame
         grassMaterial.SetFloat("_WindDisableDistance", windDisableDistance);
+        grassMaterial.SetFloat("_CameraFacing", cameraFacing);
 
         if (sourceGrassBuffer == null || argsBufferLOD0 == null || culledGrassBufferLOD0 == null) return;
 
