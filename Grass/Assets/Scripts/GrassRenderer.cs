@@ -12,9 +12,19 @@ public class GrassRenderer : MonoBehaviour
     [SerializeField] private float terrainSize = 100f;
     [SerializeField] private float minGrassHeight = 0.3f;
     [SerializeField] private float maxGrassHeight = 1.0f;
-    [SerializeField, Range(1, 15)] private int bladeSegments = 3;
+    [SerializeField, Range(1, 15)] private int lod0Segments = 5;
+    [SerializeField, Range(1, 15)] private int lod1Segments = 3;
+    [SerializeField, Range(1, 15)] private int lod2Segments = 1;
     [SerializeField] private float lod0Distance = 30.0f;
+    [SerializeField] private float lod1Distance = 60.0f;
     [SerializeField] private float maxDrawDistance = 150.0f;
+    [SerializeField] private float windDisableDistance = 50.0f; // Distance to stop wind calculations
+
+    [Header("Density Scaling")]
+    [SerializeField] private bool enableDensityScaling = true;
+    [SerializeField] private float minDensity = 0.1f; // Minimum density at max distance
+    [SerializeField] private float densityFalloffStart = 50.0f; // Distance where density starts dropping
+    [SerializeField, Range(0, 2)] private float widthCompensation = 1.0f; // Adjust grass width in falloff
 
     [Header("Generation Settings")]
     [SerializeField] private float clumpScale = 0.05f;
@@ -32,10 +42,12 @@ public class GrassRenderer : MonoBehaviour
 
     private Mesh grassMeshLOD0;
     private Mesh grassMeshLOD1;
+    private Mesh grassMeshLOD2;
 
     [Header("Rendering")]
     [SerializeField] private bool castShadows = true;
     [SerializeField] private bool castShadowsLOD1 = false; // Optimization: Disable shadows for far grass
+    [SerializeField] private bool castShadowsLOD2 = false;
     [SerializeField] private bool receiveShadows = true;
     [SerializeField] private bool useOcclusionCulling = true;
     [SerializeField] private float occlusionBias = 0.1f;
@@ -52,8 +64,10 @@ public class GrassRenderer : MonoBehaviour
     [SerializeField] private bool showDebugUI = false;
     private uint[] debugArgsLOD0 = new uint[5];
     private uint[] debugArgsLOD1 = new uint[5];
+    private uint[] debugArgsLOD2 = new uint[5];
     private int visibleCountLOD0;
     private int visibleCountLOD1;
+    private int visibleCountLOD2;
 
     [Header("Painting")]
     [SerializeField] public Texture2D densityMap;
@@ -63,10 +77,12 @@ public class GrassRenderer : MonoBehaviour
     private ComputeBuffer sourceGrassBuffer;
     private ComputeBuffer culledGrassBufferLOD0;
     private ComputeBuffer culledGrassBufferLOD1;
+    private ComputeBuffer culledGrassBufferLOD2;
     
     // Indirect arguments buffer for DrawMeshInstancedIndirect
     private ComputeBuffer argsBufferLOD0;
     private ComputeBuffer argsBufferLOD1;
+    private ComputeBuffer argsBufferLOD2;
 
     private MaterialPropertyBlock visualMPB;
     
@@ -78,9 +94,10 @@ public class GrassRenderer : MonoBehaviour
         public Vector2 facing;
         public float windPhase;
         public float stiffness;
+        public float widthScale;
         
-        // Size in bytes: 3*4 + 4 + 2*4 + 4 + 4 = 28 bytes
-        public static int Size => sizeof(float) * 8;
+        // Size in bytes: 3*4 + 4 + 2*4 + 4 + 4 + 4 = 32 bytes
+        public static int Size => sizeof(float) * 9;
     }
 
     private Bounds renderBounds;
@@ -113,8 +130,9 @@ public class GrassRenderer : MonoBehaviour
             return;
         }
         // Create grass mesh
-        grassMeshLOD0 = CreateGrassBladeMesh(bladeSegments);
-        grassMeshLOD1 = CreateGrassBladeMesh(1); // Low quality mesh (1 segment = 1 quad + tip)
+        grassMeshLOD0 = CreateGrassBladeMesh(lod0Segments);
+        grassMeshLOD1 = CreateGrassBladeMesh(lod1Segments);
+        grassMeshLOD2 = CreateGrassBladeMesh(lod2Segments);
 
         InitializeBuffers();
         DispatchComputeShader();
@@ -134,6 +152,7 @@ public class GrassRenderer : MonoBehaviour
         sourceGrassBuffer = new ComputeBuffer(grassCount, GrassData.Size);
         culledGrassBufferLOD0 = new ComputeBuffer(grassCount, GrassData.Size, ComputeBufferType.Append);
         culledGrassBufferLOD1 = new ComputeBuffer(grassCount, GrassData.Size, ComputeBufferType.Append);
+        culledGrassBufferLOD2 = new ComputeBuffer(grassCount, GrassData.Size, ComputeBufferType.Append);
 
         // Create indirect arguments buffer for LOD0
         uint[] argsLOD0 = new uint[5];
@@ -156,6 +175,17 @@ public class GrassRenderer : MonoBehaviour
 
         argsBufferLOD1 = new ComputeBuffer(1, argsLOD1.Length * sizeof(uint), ComputeBufferType.IndirectArguments);
         argsBufferLOD1.SetData(argsLOD1);
+
+        // Create indirect arguments buffer for LOD2
+        uint[] argsLOD2 = new uint[5];
+        argsLOD2[0] = grassMeshLOD2.GetIndexCount(0);
+        argsLOD2[1] = 0; 
+        argsLOD2[2] = grassMeshLOD2.GetIndexStart(0);
+        argsLOD2[3] = grassMeshLOD2.GetBaseVertex(0);
+        argsLOD2[4] = 0;
+
+        argsBufferLOD2 = new ComputeBuffer(1, argsLOD2.Length * sizeof(uint), ComputeBufferType.IndirectArguments);
+        argsBufferLOD2.SetData(argsLOD2);
 
         // Set render bounds (large enough to contain all grass)
         renderBounds = new Bounds(Vector3.zero, Vector3.one * terrainSize * 2);
@@ -215,6 +245,7 @@ public class GrassRenderer : MonoBehaviour
 
         // Set material buffer (initially source, but will be overridden by culling)
         grassMaterial.SetBuffer("_GrassDataBuffer", sourceGrassBuffer);
+        grassMaterial.SetFloat("_WindDisableDistance", windDisableDistance);
         
         Debug.Log($"Compute shader dispatched with {threadGroups} thread groups");
     }
@@ -247,27 +278,14 @@ public class GrassRenderer : MonoBehaviour
             hizKernelReduce = hizComputeShader.FindKernel("ReduceDepth");
         }
 
-        // Clear HiZ Texture to "Near" value (1 for Rev-Z, 0 for Std-Z)
-        // This ensures padding doesn't bleed "Far" values into the reduction
-        // Note: RFloat is red channel.
-        float clearValue = SystemInfo.usesReversedZBuffer ? 1.0f : 0.0f;
-        // We can't easily clear a specific channel of a specific mip with Graphics.Clear
-        // But since we overwrite the whole valid area, and we clamp reads in the shader,
-        // explicit clearing is less critical IF the shader clamping is correct.
-        // However, for safety, we can clear.
-        // Graphics.SetRenderTarget(hizTexture);
-        // GL.Clear(true, true, new Color(clearValue, 0, 0, 0));
-        // But switching RTs is heavy. Let's rely on the shader clamping I just added.
-
         // Pass 0: Blit Depth
         hizComputeShader.SetTexture(hizKernelBlit, "_InputDepthTexture", depthTexture);
         hizComputeShader.SetTexture(hizKernelBlit, "_OutputDepthTexture", hizTexture); // Mip 0
-        hizComputeShader.SetVector("_TextureSize", new Vector4(hizWidth, hizHeight, 0, 0)); // Output Size (HiZ Mip 0)
-        hizComputeShader.SetVector("_InputTextureSize", new Vector4(width, height, 0, 0)); // Input Size (Screen)
+        hizComputeShader.SetVector("_TextureSize", new Vector4(width, height, 1f/width, 1f/height));
         hizComputeShader.SetBool("_ReverseZ", SystemInfo.usesReversedZBuffer);
         
-        int threadGroupsX = Mathf.CeilToInt(hizWidth / 8.0f);
-        int threadGroupsY = Mathf.CeilToInt(hizHeight / 8.0f);
+        int threadGroupsX = Mathf.CeilToInt(width / 8.0f);
+        int threadGroupsY = Mathf.CeilToInt(height / 8.0f);
         hizComputeShader.Dispatch(hizKernelBlit, threadGroupsX, threadGroupsY, 1);
 
         // Pass 1..N: Reduce
@@ -275,9 +293,6 @@ public class GrassRenderer : MonoBehaviour
         
         for (int i = 0; i < mips; i++)
         {
-            int currentWidth = Mathf.Max(1, hizWidth >> i);
-            int currentHeight = Mathf.Max(1, hizHeight >> i);
-            
             int nextWidth = Mathf.Max(1, hizWidth >> (i + 1));
             int nextHeight = Mathf.Max(1, hizHeight >> (i + 1));
 
@@ -285,8 +300,7 @@ public class GrassRenderer : MonoBehaviour
             hizComputeShader.SetTexture(hizKernelReduce, "_InputDepthTexture", hizTexture);
             hizComputeShader.SetInt("_SourceMip", i);
             hizComputeShader.SetTexture(hizKernelReduce, "_OutputDepthTexture", hizTexture, i + 1);
-            hizComputeShader.SetVector("_TextureSize", new Vector4(nextWidth, nextHeight, 0, 0)); // Output Size
-            hizComputeShader.SetVector("_InputTextureSize", new Vector4(currentWidth, currentHeight, 0, 0)); // Input Size
+            hizComputeShader.SetVector("_TextureSize", new Vector4(nextWidth, nextHeight, 1f/nextWidth, 1f/nextHeight));
             hizComputeShader.SetBool("_ReverseZ", SystemInfo.usesReversedZBuffer);
 
             threadGroupsX = Mathf.CeilToInt(nextWidth / 8.0f);
@@ -305,6 +319,9 @@ public class GrassRenderer : MonoBehaviour
             needsUpdate = false;
             DispatchComputeShader();
         }
+        
+        // Update material properties every frame
+        grassMaterial.SetFloat("_WindDisableDistance", windDisableDistance);
 
         if (sourceGrassBuffer == null || argsBufferLOD0 == null || culledGrassBufferLOD0 == null) return;
 
@@ -312,6 +329,7 @@ public class GrassRenderer : MonoBehaviour
         // Reset counters
         culledGrassBufferLOD0.SetCounterValue(0);
         culledGrassBufferLOD1.SetCounterValue(0);
+        culledGrassBufferLOD2.SetCounterValue(0);
 
         // Get frustum planes
         GeometryUtility.CalculateFrustumPlanes(mainCamera, cameraFrustumPlanes);
@@ -329,12 +347,21 @@ public class GrassRenderer : MonoBehaviour
         computeShader.SetBuffer(cullKernelIndex, "_SourceGrassBuffer", sourceGrassBuffer);
         computeShader.SetBuffer(cullKernelIndex, "_CulledGrassBufferLOD0", culledGrassBufferLOD0);
         computeShader.SetBuffer(cullKernelIndex, "_CulledGrassBufferLOD1", culledGrassBufferLOD1);
+        computeShader.SetBuffer(cullKernelIndex, "_CulledGrassBufferLOD2", culledGrassBufferLOD2);
         computeShader.SetFloats("_FrustumPlanes", frustumPlaneFloats);
         computeShader.SetInt("_GrassCount", grassCount);
         // Optimization: Pass squared distances to avoid sqrt in shader
         computeShader.SetFloat("_LOD0DistanceSq", lod0Distance * lod0Distance);
+        computeShader.SetFloat("_LOD1DistanceSq", lod1Distance * lod1Distance);
         computeShader.SetFloat("_MaxDrawDistanceSq", maxDrawDistance * maxDrawDistance);
+        computeShader.SetFloat("_MaxDrawDistance", maxDrawDistance);
         computeShader.SetVector("_CameraPosition", mainCamera.transform.position);
+
+        // Density Scaling
+        computeShader.SetBool("_EnableDensityScaling", enableDensityScaling);
+        computeShader.SetFloat("_MinDensity", minDensity);
+        computeShader.SetFloat("_DensityFalloffStart", densityFalloffStart);
+        computeShader.SetFloat("_WidthCompensation", widthCompensation);
 
         // Occlusion Culling
         Texture depthTexture = Shader.GetGlobalTexture("_CameraDepthTexture");
@@ -382,14 +409,17 @@ public class GrassRenderer : MonoBehaviour
         // Copy count to args buffers
         ComputeBuffer.CopyCount(culledGrassBufferLOD0, argsBufferLOD0, 4);
         ComputeBuffer.CopyCount(culledGrassBufferLOD1, argsBufferLOD1, 4);
+        ComputeBuffer.CopyCount(culledGrassBufferLOD2, argsBufferLOD2, 4);
 
         // Debug Readback (Warning: Causes GPU stall, only use for debugging)
         if (showDebugUI)
         {
             argsBufferLOD0.GetData(debugArgsLOD0);
             argsBufferLOD1.GetData(debugArgsLOD1);
+            argsBufferLOD2.GetData(debugArgsLOD2);
             visibleCountLOD0 = (int)debugArgsLOD0[1];
             visibleCountLOD1 = (int)debugArgsLOD1[1];
+            visibleCountLOD2 = (int)debugArgsLOD2[1];
         }
 
         // Initialize MaterialPropertyBlocks if needed
@@ -414,7 +444,7 @@ public class GrassRenderer : MonoBehaviour
             null
         );
 
-        // 3. Render LOD1 (Low Quality)
+        // 3. Render LOD1 (Medium Quality)
         visualMPB.SetBuffer("_GrassDataBuffer", culledGrassBufferLOD1);
         Graphics.DrawMeshInstancedIndirect(
             grassMeshLOD1,
@@ -425,6 +455,22 @@ public class GrassRenderer : MonoBehaviour
             0,
             visualMPB,
             (castShadows && castShadowsLOD1) ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.Off,
+            receiveShadows,
+            0,
+            null
+        );
+
+        // 4. Render LOD2 (Low Quality)
+        visualMPB.SetBuffer("_GrassDataBuffer", culledGrassBufferLOD2);
+        Graphics.DrawMeshInstancedIndirect(
+            grassMeshLOD2,
+            0,
+            grassMaterial,
+            renderBounds,
+            argsBufferLOD2,
+            0,
+            visualMPB,
+            (castShadows && castShadowsLOD2) ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.Off,
             receiveShadows,
             0,
             null
@@ -526,8 +572,10 @@ public class GrassRenderer : MonoBehaviour
         sourceGrassBuffer?.Release();
         culledGrassBufferLOD0?.Release();
         culledGrassBufferLOD1?.Release();
+        culledGrassBufferLOD2?.Release();
         argsBufferLOD0?.Release();
         argsBufferLOD1?.Release();
+        argsBufferLOD2?.Release();
         if (hizTexture != null) hizTexture.Release();
     }
 
@@ -537,8 +585,10 @@ public class GrassRenderer : MonoBehaviour
         sourceGrassBuffer?.Release();
         culledGrassBufferLOD0?.Release();
         culledGrassBufferLOD1?.Release();
+        culledGrassBufferLOD2?.Release();
         argsBufferLOD0?.Release();
         argsBufferLOD1?.Release();
+        argsBufferLOD2?.Release();
         if (hizTexture != null) hizTexture.Release();
     }
 
@@ -567,6 +617,10 @@ public class GrassRenderer : MonoBehaviour
             // LOD0 Range (Yellow)
             Gizmos.color = Color.yellow;
             Gizmos.DrawWireSphere(cam.transform.position, lod0Distance);
+
+            // LOD1 Range (Cyan)
+            Gizmos.color = Color.cyan;
+            Gizmos.DrawWireSphere(cam.transform.position, lod1Distance);
             
             // Max Draw Distance (Red)
             Gizmos.color = Color.red;
@@ -585,7 +639,8 @@ public class GrassRenderer : MonoBehaviour
         GUILayout.Label($"Total Grass: {grassCount:N0}");
         GUILayout.Label($"Visible LOD0: {visibleCountLOD0:N0}");
         GUILayout.Label($"Visible LOD1: {visibleCountLOD1:N0}");
-        GUILayout.Label($"Total Visible: {visibleCountLOD0 + visibleCountLOD1:N0}");
+        GUILayout.Label($"Visible LOD2: {visibleCountLOD2:N0}");
+        GUILayout.Label($"Total Visible: {visibleCountLOD0 + visibleCountLOD1 + visibleCountLOD2:N0}");
         
         GUILayout.Space(10);
         GUILayout.Label("Occlusion Culling");

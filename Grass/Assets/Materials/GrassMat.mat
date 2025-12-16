@@ -147,6 +147,7 @@ Material:
     - _TranslucencyDistortion: 0.1
     - _TranslucencyPower: 6.47
     - _TranslucencyScale: 1
+    - _WindDisableDistance: 80
     - _WindFlutterStrength: 0.01
     - _WindFrequency: 0.005
     - _WindGustStrength: 2

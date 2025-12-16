@@ -12,6 +12,7 @@ struct GrassData
     float2 facing;      // Direction the grass blade faces (for rotation)
     float windPhase;    // Phase offset for wind animation
     float stiffness;    // Wind resistance (0.8-1.0), lower = more flexible
+    float widthScale;   // Width multiplier for density scaling
 };
 
 // Output buffer for grass positions
@@ -21,10 +22,19 @@ RWStructuredBuffer<GrassData> grassDataBuffer;
 StructuredBuffer<GrassData> _SourceGrassBuffer;
 AppendStructuredBuffer<GrassData> _CulledGrassBufferLOD0;
 AppendStructuredBuffer<GrassData> _CulledGrassBufferLOD1;
+AppendStructuredBuffer<GrassData> _CulledGrassBufferLOD2;
 float4 _FrustumPlanes[6];
 float _MaxDrawDistanceSq;
+float _MaxDrawDistance;
 float _LOD0DistanceSq;
+float _LOD1DistanceSq;
 float3 _CameraPosition;
+
+// Density Scaling
+bool _EnableDensityScaling;
+float _MinDensity;
+float _DensityFalloffStart;
+float _WidthCompensation;
 
 // Parameters
 float _TerrainSize;     // Size of the terrain
@@ -222,6 +232,8 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     // Stiffness - random value between 0.8 and 1.0 for wind resistance variation
     grass.stiffness = 0.8 + hash12(basePos + 91.23) * 0.2;
     
+    grass.widthScale = 1.0;
+
     grassDataBuffer[id.x] = grass;
 }
 
@@ -240,6 +252,33 @@ void CSCull(uint3 id : SV_DispatchThreadID)
     
     if (distSq > _MaxDrawDistanceSq)
         return;
+
+    // Density Scaling
+    if (_EnableDensityScaling)
+    {
+        float dist = sqrt(distSq);
+        if (dist > _DensityFalloffStart)
+        {
+            // Calculate density factor (1.0 at start, _MinDensity at end)
+            // Use _MaxDrawDistance as the end of the falloff
+            float t = saturate((dist - _DensityFalloffStart) / (_MaxDrawDistance - _DensityFalloffStart));
+            float density = lerp(1.0, _MinDensity, t);
+            
+            // Random check to see if this blade survives
+            // Use a stable hash based on ID or position
+            float randomVal = hash12(float2(id.x, id.x * 0.5));
+            
+            if (randomVal > density)
+            {
+                return; // Cull this blade
+            }
+            
+            // Compensate width for remaining blades
+            // If density is 0.5 (50% blades), width should be 2.0 (200%)
+            float targetWidthScale = 1.0 / max(0.001, density);
+            grass.widthScale = lerp(1.0, targetWidthScale, _WidthCompensation);
+        }
+    }
 
     // 2. Frustum Culling
     // Check a sphere around the grass blade
@@ -329,9 +368,13 @@ void CSCull(uint3 id : SV_DispatchThreadID)
         {
             _CulledGrassBufferLOD0.Append(grass);
         }
-        else
+        else if (distSq < _LOD1DistanceSq)
         {
             _CulledGrassBufferLOD1.Append(grass);
+        }
+        else
+        {
+            _CulledGrassBufferLOD2.Append(grass);
         }
     }
 }

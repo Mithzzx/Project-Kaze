@@ -22,6 +22,7 @@ Shader "Custom/GrassShader"
         _WindFrequency ("Wind Frequency (Tile Size)", Float) = 0.05
         _WindGustStrength ("Gust Strength", Float) = 1.0
         _WindFlutterStrength ("Flutter Strength", Float) = 0.1
+        _WindDisableDistance ("Wind Disable Distance", Float) = 50.0
         
         [Header(Normal Rounding)]
         _NormalRotationAngle ("Normal Rotation Angle", Range(0, 0.5)) = 0.3
@@ -57,6 +58,7 @@ Shader "Custom/GrassShader"
             float2 facing;
             float windPhase;
             float stiffness;
+            float widthScale;
         };
         
         // Variables
@@ -79,6 +81,7 @@ Shader "Custom/GrassShader"
             float _WindFrequency;
             float _WindGustStrength;
             float _WindFlutterStrength;
+            float _WindDisableDistance;
             float _NormalRotationAngle;
             float _Translucency;
             float _TranslucencyPower;
@@ -146,6 +149,11 @@ Shader "Custom/GrassShader"
             // 2. Wind Calculation
             float3 worldPos = grass.position;
             
+            // Calculate distance fade for wind
+            float dist = distance(worldPos, _WorldSpaceCameraPos);
+            // Fade out wind over 10 meters before the disable distance
+            float windFade = 1.0 - saturate((dist - (_WindDisableDistance - 10.0)) / 10.0);
+            
             // Macro Wind
             float2 windUV = worldPos.xz * _WindFrequency + _Time.y * _WindVelocity.xy;
             float windSample = SAMPLE_TEXTURE2D_LOD(_WindMap, sampler_WindMap, windUV, 0).r;
@@ -154,7 +162,8 @@ Shader "Custom/GrassShader"
             float flutter = sin(_Time.y * 15.0 + grass.windPhase * 10.0) * _WindFlutterStrength;
             
             // Combine and apply stiffness (lower stiffness = more wind effect)
-            float currentWindImpact = ((windSample * _WindGustStrength) + flutter) * (2.0 - grass.stiffness);
+            // Apply distance fade
+            float currentWindImpact = ((windSample * _WindGustStrength) + flutter) * (2.0 - grass.stiffness) * windFade;
             
             // Wind Direction (Object Space)
             float3 windDirWS = normalize(float3(_WindVelocity.x, 0, _WindVelocity.y));
@@ -203,7 +212,7 @@ Shader "Custom/GrassShader"
             // Assuming input mesh is a quad with x centered at 0
             // We can use the input positionOS.x to determine width offset
             // Or use UV.x if we want to be procedural about width too
-            float width = _BladeWidth;
+            float width = _BladeWidth * grass.widthScale;
             float3 widthOffset = float3(positionOS.x * (width / 0.05), 0, 0); // Scale based on default width 0.05
             
             positionOS = spinePos + widthOffset;

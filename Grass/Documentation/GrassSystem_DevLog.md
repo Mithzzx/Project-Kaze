@@ -67,3 +67,37 @@ Tools for managing the underlying density texture:
 5. **Left Click** on the terrain to paint grass.
 6. **Shift + Left Click** to erase.
 7. Click **"Save Mask"** to save your work to a file.
+
+## Optimization Update - December 16, 2025 (Part 2)
+
+To improve performance for large-scale environments, several optimization techniques were implemented, focusing on reducing vertex count and GPU load for distant grass.
+
+### 1. Three-Stage LOD System
+The Level of Detail (LOD) system was expanded from 2 to 3 levels to provide smoother transitions and better performance scaling.
+- **LOD 0 (High)**: Full detail mesh. Configurable segment count (default: 5).
+- **LOD 1 (Medium)**: Reduced detail. Configurable segment count (default: 3).
+- **LOD 2 (Low)**: Lowest detail (billboard-like). Configurable segment count (default: 1).
+- **Distance Control**: Separate distance thresholds for LOD 0 and LOD 1 transitions.
+- **Shadow Optimization**: Option to disable shadow casting for LOD 1 and LOD 2 independently.
+
+### 2. Density Scaling (Distance-Based Thinning)
+A technique to significantly reduce the number of grass blades drawn at a distance without losing visual volume.
+- **Concept**: As distance increases, the number of blades is reduced (culled randomly), but the remaining blades are widened to compensate.
+- **Parameters**:
+  - **Min Density**: The fraction of grass remaining at the max draw distance (e.g., 0.1 = 10%).
+  - **Falloff Start**: Distance where thinning begins.
+  - **Width Compensation**: Controls how much the remaining blades are widened.
+    - `1.0`: Mathematically correct volume preservation.
+    - `>1.0`: Thicker appearance.
+    - `<1.0`: Thinner/sparser appearance.
+
+### 3. Wind Animation Optimization
+To save GPU cycles in the vertex shader, wind calculations are now disabled for distant grass.
+- **Wind Disable Distance**: The distance at which wind animation stops completely.
+- **Smooth Fade**: A 10-meter fade-out zone prevents "popping" artifacts where grass suddenly freezes.
+- **Performance Gain**: Skips complex noise sampling, bezier curve calculations, and rotation operations for distant vertices.
+
+### Files Modified
+- `Assets/Scripts/GrassRenderer.cs`: Added new settings and logic for LODs, density scaling, and wind distance.
+- `Assets/Shaders/GrassCompute.compute`: Implemented density-based culling and width scaling logic.
+- `Assets/Shaders/GrassShader.shader`: Added support for variable blade width and distance-based wind fading.
