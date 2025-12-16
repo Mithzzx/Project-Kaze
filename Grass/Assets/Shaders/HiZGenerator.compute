@@ -1,0 +1,71 @@
+#pragma kernel BlitDepth
+#pragma kernel ReduceDepth
+
+Texture2D<float> _InputDepthTexture; // Camera Depth or Previous Mip
+RWTexture2D<float> _OutputDepthTexture; // Current Mip
+SamplerState sampler_InputDepthTexture;
+
+float4 _TextureSize; // x: width, y: height (Output Size)
+float4 _InputTextureSize; // x: width, y: height (Input Size)
+
+// We need to know if we are using Reversed-Z (1=near, 0=far) or Standard-Z (0=near, 1=far)
+// In Unity URP, it's usually Reversed-Z.
+// For occlusion culling, we want the "farthest" depth in the tile.
+// If Reversed-Z: Farthest is MIN value.
+// If Standard-Z: Farthest is MAX value.
+bool _ReverseZ; 
+int _SourceMip;
+
+[numthreads(8, 8, 1)]
+void BlitDepth(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_TextureSize.x || id.y >= (uint)_TextureSize.y) return;
+
+    // For the first pass, we just copy the depth
+    // We can sample or load. Load is safer for exact values.
+    // Clamp to input size just in case
+    int2 srcCoord = min(int2(id.xy), (int2)_InputTextureSize.xy - 1);
+    float depth = _InputDepthTexture.Load(int3(srcCoord, 0));
+    _OutputDepthTexture[id.xy] = depth;
+}
+
+[numthreads(8, 8, 1)]
+void ReduceDepth(uint3 id : SV_DispatchThreadID)
+{
+    // Output size is half of input size
+    if (id.x >= (uint)_TextureSize.x || id.y >= (uint)_TextureSize.y) return;
+
+    // Read 4 pixels from the previous mip level (Input)
+    // The input texture is 2x larger than the output
+    uint2 srcCoord = id.xy * 2;
+    
+    // Clamp coordinates to ensure we don't read out of bounds (which returns 0)
+    // 0 is "Far" in Reverse-Z, which would break culling at edges
+    int2 maxCoord = (int2)_InputTextureSize.xy - 1;
+    
+    int2 c1 = min(int2(srcCoord + uint2(0, 0)), maxCoord);
+    int2 c2 = min(int2(srcCoord + uint2(1, 0)), maxCoord);
+    int2 c3 = min(int2(srcCoord + uint2(0, 1)), maxCoord);
+    int2 c4 = min(int2(srcCoord + uint2(1, 1)), maxCoord);
+    
+    float d1 = _InputDepthTexture.Load(int3(c1, _SourceMip));
+    float d2 = _InputDepthTexture.Load(int3(c2, _SourceMip));
+    float d3 = _InputDepthTexture.Load(int3(c3, _SourceMip));
+    float d4 = _InputDepthTexture.Load(int3(c4, _SourceMip));
+
+    float result;
+
+    if (_ReverseZ)
+    {
+        // Reversed-Z: 0 is far. We want the minimum (farthest) value.
+        // If any pixel in the 2x2 block is far away (0), the whole block is considered "open" up to that distance.
+        result = min(min(d1, d2), min(d3, d4));
+    }
+    else
+    {
+        // Standard-Z: 1 is far. We want the maximum (farthest) value.
+        result = max(max(d1, d2), max(d3, d4));
+    }
+
+    _OutputDepthTexture[id.xy] = result;
+}

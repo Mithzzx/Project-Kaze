@@ -40,16 +40,6 @@ public class GrassPainterEditor : Editor
         GUILayout.Space(10);
         GUILayout.Label("Painting Tools", EditorStyles.boldLabel);
         
-        // Toggle Grass Rendering
-        EditorGUI.BeginChangeCheck();
-        bool renderGrass = EditorGUILayout.Toggle("Render Grass In Editor", grassRenderer.renderInEditMode);
-        if (EditorGUI.EndChangeCheck())
-        {
-            Undo.RecordObject(grassRenderer, "Toggle Grass Rendering");
-            grassRenderer.renderInEditMode = renderGrass;
-            EditorUtility.SetDirty(grassRenderer);
-        }
-
         if (GUILayout.Button(isPainting ? "Stop Painting" : "Start Painting"))
         {
             isPainting = !isPainting;

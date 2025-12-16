@@ -25,12 +25,10 @@ public class GrassRenderer : MonoBehaviour
 
     [Header("References")]
     [SerializeField] private ComputeShader computeShader;
+    [SerializeField] private ComputeShader hizComputeShader; // Added HiZ Compute Shader
     [SerializeField] private Material grassMaterial;
     [SerializeField] private Terrain terrain; // Added Terrain reference
     
-    [Header("Painting")]
-    [SerializeField] public Texture2D densityMap;
-    [SerializeField] public float densityThreshold = 0.1f;
 
     private Mesh grassMeshLOD0;
     private Mesh grassMeshLOD1;
@@ -39,8 +37,27 @@ public class GrassRenderer : MonoBehaviour
     [SerializeField] private bool castShadows = true;
     [SerializeField] private bool castShadowsLOD1 = false; // Optimization: Disable shadows for far grass
     [SerializeField] private bool receiveShadows = true;
+    [SerializeField] private bool useOcclusionCulling = true;
+    [SerializeField] private float occlusionBias = 0.1f;
     [SerializeField] private Camera mainCamera;
     [SerializeField] public bool renderInEditMode = true;
+
+    // HiZ Variables
+    private RenderTexture hizTexture;
+    private int hizKernelBlit;
+    private int hizKernelReduce;
+    private Vector2 hizTextureSize;
+
+    [Header("Debug")]
+    [SerializeField] private bool showDebugUI = false;
+    private uint[] debugArgsLOD0 = new uint[5];
+    private uint[] debugArgsLOD1 = new uint[5];
+    private int visibleCountLOD0;
+    private int visibleCountLOD1;
+
+    [Header("Painting")]
+    [SerializeField] public Texture2D densityMap;
+    [SerializeField] public float densityThreshold = 0.1f;
 
     // Compute buffer to hold grass data
     private ComputeBuffer sourceGrassBuffer;
@@ -202,9 +219,85 @@ public class GrassRenderer : MonoBehaviour
         Debug.Log($"Compute shader dispatched with {threadGroups} thread groups");
     }
 
+    private void GenerateHiZ(Texture depthTexture)
+    {
+        if (hizComputeShader == null || depthTexture == null) return;
+
+        int width = depthTexture.width;
+        int height = depthTexture.height;
+
+        // Ensure HiZ texture matches screen size (power of two is better for mips)
+        int hizWidth = Mathf.NextPowerOfTwo(width);
+        int hizHeight = Mathf.NextPowerOfTwo(height);
+
+        if (hizTexture == null || hizTexture.width != hizWidth || hizTexture.height != hizHeight)
+        {
+            if (hizTexture != null) hizTexture.Release();
+            
+            hizTexture = new RenderTexture(hizWidth, hizHeight, 0, RenderTextureFormat.RFloat);
+            hizTexture.enableRandomWrite = true;
+            hizTexture.useMipMap = true;
+            hizTexture.autoGenerateMips = false;
+            hizTexture.filterMode = FilterMode.Point;
+            hizTexture.Create();
+            
+            hizTextureSize = new Vector2(hizWidth, hizHeight);
+            
+            hizKernelBlit = hizComputeShader.FindKernel("BlitDepth");
+            hizKernelReduce = hizComputeShader.FindKernel("ReduceDepth");
+        }
+
+        // Clear HiZ Texture to "Near" value (1 for Rev-Z, 0 for Std-Z)
+        // This ensures padding doesn't bleed "Far" values into the reduction
+        // Note: RFloat is red channel.
+        float clearValue = SystemInfo.usesReversedZBuffer ? 1.0f : 0.0f;
+        // We can't easily clear a specific channel of a specific mip with Graphics.Clear
+        // But since we overwrite the whole valid area, and we clamp reads in the shader,
+        // explicit clearing is less critical IF the shader clamping is correct.
+        // However, for safety, we can clear.
+        // Graphics.SetRenderTarget(hizTexture);
+        // GL.Clear(true, true, new Color(clearValue, 0, 0, 0));
+        // But switching RTs is heavy. Let's rely on the shader clamping I just added.
+
+        // Pass 0: Blit Depth
+        hizComputeShader.SetTexture(hizKernelBlit, "_InputDepthTexture", depthTexture);
+        hizComputeShader.SetTexture(hizKernelBlit, "_OutputDepthTexture", hizTexture); // Mip 0
+        hizComputeShader.SetVector("_TextureSize", new Vector4(hizWidth, hizHeight, 0, 0)); // Output Size (HiZ Mip 0)
+        hizComputeShader.SetVector("_InputTextureSize", new Vector4(width, height, 0, 0)); // Input Size (Screen)
+        hizComputeShader.SetBool("_ReverseZ", SystemInfo.usesReversedZBuffer);
+        
+        int threadGroupsX = Mathf.CeilToInt(hizWidth / 8.0f);
+        int threadGroupsY = Mathf.CeilToInt(hizHeight / 8.0f);
+        hizComputeShader.Dispatch(hizKernelBlit, threadGroupsX, threadGroupsY, 1);
+
+        // Pass 1..N: Reduce
+        int mips = Mathf.FloorToInt(Mathf.Log(Mathf.Max(hizWidth, hizHeight), 2));
+        
+        for (int i = 0; i < mips; i++)
+        {
+            int currentWidth = Mathf.Max(1, hizWidth >> i);
+            int currentHeight = Mathf.Max(1, hizHeight >> i);
+            
+            int nextWidth = Mathf.Max(1, hizWidth >> (i + 1));
+            int nextHeight = Mathf.Max(1, hizHeight >> (i + 1));
+
+            // Input is Mip i, Output is Mip i+1
+            hizComputeShader.SetTexture(hizKernelReduce, "_InputDepthTexture", hizTexture);
+            hizComputeShader.SetInt("_SourceMip", i);
+            hizComputeShader.SetTexture(hizKernelReduce, "_OutputDepthTexture", hizTexture, i + 1);
+            hizComputeShader.SetVector("_TextureSize", new Vector4(nextWidth, nextHeight, 0, 0)); // Output Size
+            hizComputeShader.SetVector("_InputTextureSize", new Vector4(currentWidth, currentHeight, 0, 0)); // Input Size
+            hizComputeShader.SetBool("_ReverseZ", SystemInfo.usesReversedZBuffer);
+
+            threadGroupsX = Mathf.CeilToInt(nextWidth / 8.0f);
+            threadGroupsY = Mathf.CeilToInt(nextHeight / 8.0f);
+            hizComputeShader.Dispatch(hizKernelReduce, threadGroupsX, threadGroupsY, 1);
+        }
+    }
+
     private void Update()
     {
-        // Handle Edit Mode rendering toggle
+        // Edit Mode Rendering Check
         if (!Application.isPlaying && !renderInEditMode) return;
 
         if (needsUpdate && sourceGrassBuffer != null)
@@ -243,6 +336,45 @@ public class GrassRenderer : MonoBehaviour
         computeShader.SetFloat("_MaxDrawDistanceSq", maxDrawDistance * maxDrawDistance);
         computeShader.SetVector("_CameraPosition", mainCamera.transform.position);
 
+        // Occlusion Culling
+        Texture depthTexture = Shader.GetGlobalTexture("_CameraDepthTexture");
+        bool canUseOcclusion = useOcclusionCulling && depthTexture != null && hizComputeShader != null;
+
+        if (canUseOcclusion)
+        {
+            GenerateHiZ(depthTexture);
+        }
+
+        computeShader.SetBool("_UseOcclusionCulling", canUseOcclusion);
+        if (canUseOcclusion)
+        {
+            computeShader.SetTexture(cullKernelIndex, "_HiZTexture", hizTexture);
+            computeShader.SetVector("_HiZTextureSize", hizTextureSize);
+            
+            // Calculate VP Matrix
+            Matrix4x4 proj = GL.GetGPUProjectionMatrix(mainCamera.projectionMatrix, false);
+            Matrix4x4 vp = proj * mainCamera.worldToCameraMatrix;
+            computeShader.SetMatrix("_VPMatrix", vp);
+            
+            computeShader.SetFloat("_OcclusionBias", occlusionBias);
+
+            // Calculate ZBufferParams for LinearEyeDepth
+            float near = mainCamera.nearClipPlane;
+            float far = mainCamera.farClipPlane;
+            Vector4 zBufferParams;
+
+            // Unity uses reversed Z buffer on most modern platforms (DX11, DX12, Metal, Consoles)
+            if (SystemInfo.usesReversedZBuffer)
+            {
+                zBufferParams = new Vector4(-1.0f + far / near, 1.0f, (-1.0f + far / near) / far, 1.0f / far);
+            }
+            else
+            {
+                zBufferParams = new Vector4(1.0f - far / near, far / near, (1.0f - far / near) / far, (far / near) / far);
+            }
+            computeShader.SetVector("_ZBufferParams", zBufferParams);
+        }
+
         // Dispatch culling
         int threadGroups = Mathf.CeilToInt((float)grassCount / threadGroupSize);
         computeShader.Dispatch(cullKernelIndex, threadGroups, 1, 1);
@@ -250,6 +382,15 @@ public class GrassRenderer : MonoBehaviour
         // Copy count to args buffers
         ComputeBuffer.CopyCount(culledGrassBufferLOD0, argsBufferLOD0, 4);
         ComputeBuffer.CopyCount(culledGrassBufferLOD1, argsBufferLOD1, 4);
+
+        // Debug Readback (Warning: Causes GPU stall, only use for debugging)
+        if (showDebugUI)
+        {
+            argsBufferLOD0.GetData(debugArgsLOD0);
+            argsBufferLOD1.GetData(debugArgsLOD1);
+            visibleCountLOD0 = (int)debugArgsLOD0[1];
+            visibleCountLOD1 = (int)debugArgsLOD1[1];
+        }
 
         // Initialize MaterialPropertyBlocks if needed
         if (visualMPB == null) visualMPB = new MaterialPropertyBlock();
@@ -387,6 +528,7 @@ public class GrassRenderer : MonoBehaviour
         culledGrassBufferLOD1?.Release();
         argsBufferLOD0?.Release();
         argsBufferLOD1?.Release();
+        if (hizTexture != null) hizTexture.Release();
     }
 
     private void OnDisable()
@@ -397,6 +539,7 @@ public class GrassRenderer : MonoBehaviour
         culledGrassBufferLOD1?.Release();
         argsBufferLOD0?.Release();
         argsBufferLOD1?.Release();
+        if (hizTexture != null) hizTexture.Release();
     }
 
     // Editor helper to regenerate grass
@@ -429,5 +572,76 @@ public class GrassRenderer : MonoBehaviour
             Gizmos.color = Color.red;
             Gizmos.DrawWireSphere(cam.transform.position, maxDrawDistance);
         }
+    }
+
+    private void OnGUI()
+    {
+        if (!showDebugUI) return;
+
+        GUILayout.BeginArea(new Rect(10, 10, 350, 600), GUI.skin.box);
+        GUILayout.Label("Grass Renderer Debug", GUI.skin.button);
+        GUILayout.Space(5);
+        
+        GUILayout.Label($"Total Grass: {grassCount:N0}");
+        GUILayout.Label($"Visible LOD0: {visibleCountLOD0:N0}");
+        GUILayout.Label($"Visible LOD1: {visibleCountLOD1:N0}");
+        GUILayout.Label($"Total Visible: {visibleCountLOD0 + visibleCountLOD1:N0}");
+        
+        GUILayout.Space(10);
+        GUILayout.Label("Occlusion Culling");
+        
+        if (hizComputeShader == null)
+        {
+            GUI.color = Color.red;
+            GUILayout.Label("ERROR: HiZ Compute Shader missing!");
+            GUILayout.Label("Assign 'HiZGenerator' in Inspector.");
+            GUI.color = Color.white;
+        }
+        
+        bool newOcclusion = GUILayout.Toggle(useOcclusionCulling, "Use Occlusion Culling");
+        if (newOcclusion != useOcclusionCulling)
+        {
+            useOcclusionCulling = newOcclusion;
+        }
+
+        if (useOcclusionCulling)
+        {
+            Texture depth = Shader.GetGlobalTexture("_CameraDepthTexture");
+            if (depth == null)
+            {
+                GUI.color = Color.red;
+                GUILayout.Label("WARNING: _CameraDepthTexture is null!");
+                GUILayout.Label("Enable Depth Texture in URP Asset.");
+                GUI.color = Color.white;
+            }
+            else
+            {
+                GUI.color = Color.green;
+                GUILayout.Label($"Depth Texture: Found ({depth.width}x{depth.height})");
+                GUI.color = Color.white;
+                
+                // Depth Preview
+                GUILayout.Label("Depth Texture Preview:");
+                Rect rDepth = GUILayoutUtility.GetRect(300, 100);
+                GUI.DrawTexture(rDepth, depth, ScaleMode.ScaleToFit, false);
+            }
+            
+            if (hizTexture != null)
+            {
+                GUILayout.Label($"HiZ Texture: {hizTexture.width}x{hizTexture.height}");
+                GUILayout.Label("HiZ Preview (Mips):");
+                Rect rHiz = GUILayoutUtility.GetRect(300, 150);
+                GUI.DrawTexture(rHiz, hizTexture, ScaleMode.ScaleToFit, false);
+            }
+
+            GUILayout.Label($"Bias: {occlusionBias}");
+            float newBias = GUILayout.HorizontalSlider(occlusionBias, 0.0f, 1.0f);
+            if (Mathf.Abs(newBias - occlusionBias) > 0.001f)
+            {
+                occlusionBias = newBias;
+            }
+        }
+
+        GUILayout.EndArea();
     }
 }

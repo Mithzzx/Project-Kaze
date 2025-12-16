@@ -53,6 +53,20 @@ Texture2D<float4> _DensityMap;
 bool _UseDensityMap;
 float _DensityThreshold;
 
+// Occlusion Culling
+bool _UseOcclusionCulling;
+float4x4 _VPMatrix;
+Texture2D<float> _HiZTexture; // Changed from _DepthTexture
+float2 _HiZTextureSize;       // Changed from _ScreenParams
+float _OcclusionBias;
+float4 _ZBufferParams;
+
+// Helper for LinearEyeDepth
+float LinearEyeDepth(float z)
+{
+    return 1.0 / (_ZBufferParams.z * z + _ZBufferParams.w);
+}
+
 // --- NOISE FUNCTIONS ---
 
 // Hash function
@@ -248,6 +262,63 @@ void CSCull(uint3 id : SV_DispatchThreadID)
         {
             visible = false;
             break;
+        }
+    }
+
+    // Occlusion Culling
+    if (visible && _UseOcclusionCulling)
+    {
+        float4 clipPos = mul(_VPMatrix, float4(center, 1.0));
+        
+        // Check if behind camera
+        if (clipPos.w <= 0) 
+        {
+            // Behind camera
+        }
+        else
+        {
+            float3 ndc = clipPos.xyz / clipPos.w;
+            float2 uv = ndc.xy * 0.5 + 0.5;
+
+            // Check if inside screen
+            if (uv.x > 0 && uv.x < 1 && uv.y > 0 && uv.y < 1)
+            {
+                // Calculate Box Size
+                // Project a point on the edge of the sphere to get size
+                float4 clipPosRight = mul(_VPMatrix, float4(center + float3(radius, 0, 0), 1.0));
+                float4 clipPosUp = mul(_VPMatrix, float4(center + float3(0, radius, 0), 1.0));
+                
+                float2 uvRight = (clipPosRight.xyz / clipPosRight.w).xy * 0.5 + 0.5;
+                float2 uvUp = (clipPosUp.xyz / clipPosUp.w).xy * 0.5 + 0.5;
+                
+                // Calculate box size in pixels
+                float2 sizePixels = float2(
+                    abs(uvRight.x - uv.x) * _HiZTextureSize.x * 2.0,
+                    abs(uvUp.y - uv.y) * _HiZTextureSize.y * 2.0
+                );
+                
+                float maxDim = max(sizePixels.x, sizePixels.y);
+                
+                // Calculate Mip Level
+                float mip = ceil(log2(maxDim));
+                mip = max(0, mip);
+                
+                // Sample HiZ
+                float2 mipSize = _HiZTextureSize / pow(2, mip);
+                int2 mipCoords = int2(uv * mipSize);
+                mipCoords = clamp(mipCoords, int2(0, 0), int2(mipSize) - 1);
+                
+                float hizDepth = _HiZTexture.Load(int3(mipCoords, mip));
+                
+                float sceneDepth = LinearEyeDepth(hizDepth);
+                float grassDepth = clipPos.w - radius; // Closest point
+
+                // If grass is further than scene depth + bias, it is occluded
+                if (grassDepth > sceneDepth + _OcclusionBias)
+                {
+                    visible = false;
+                }
+            }
         }
     }
 
