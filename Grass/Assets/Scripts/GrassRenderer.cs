@@ -4,6 +4,7 @@ using UnityEngine;
 /// GPU Instanced Grass Renderer
 /// Renders up to 1 million grass blades using compute shaders and GPU instancing
 /// </summary>
+[ExecuteAlways]
 public class GrassRenderer : MonoBehaviour
 {
     [Header("Grass Settings")]
@@ -26,7 +27,11 @@ public class GrassRenderer : MonoBehaviour
     [SerializeField] private ComputeShader computeShader;
     [SerializeField] private Material grassMaterial;
     [SerializeField] private Terrain terrain; // Added Terrain reference
-    [SerializeField] private GrassPaintMask grassMask; // Grass density mask for painting
+    
+    [Header("Painting")]
+    [SerializeField] public Texture2D densityMap;
+    [SerializeField] public float densityThreshold = 0.1f;
+
     private Mesh grassMeshLOD0;
     private Mesh grassMeshLOD1;
 
@@ -35,6 +40,7 @@ public class GrassRenderer : MonoBehaviour
     [SerializeField] private bool castShadowsLOD1 = false; // Optimization: Disable shadows for far grass
     [SerializeField] private bool receiveShadows = true;
     [SerializeField] private Camera mainCamera;
+    [SerializeField] public bool renderInEditMode = true;
 
     // Compute buffer to hold grass data
     private ComputeBuffer sourceGrassBuffer;
@@ -69,6 +75,11 @@ public class GrassRenderer : MonoBehaviour
     private bool needsUpdate = false;
 
     private void OnValidate()
+    {
+        needsUpdate = true;
+    }
+
+    public void Refresh()
     {
         needsUpdate = true;
     }
@@ -167,15 +178,16 @@ public class GrassRenderer : MonoBehaviour
             computeShader.SetVector("_TerrainPos", terrain.transform.position);
         }
 
-        // Grass Mask Integration
-        if (grassMask != null && grassMask.MaskTexture != null)
+        // Density Map Integration
+        if (densityMap != null)
         {
-            computeShader.SetTexture(kernelIndex, "_GrassMask", grassMask.MaskTexture);
-            computeShader.SetInt("_UseGrassMask", 1);
+            computeShader.SetTexture(kernelIndex, "_DensityMap", densityMap);
+            computeShader.SetBool("_UseDensityMap", true);
+            computeShader.SetFloat("_DensityThreshold", densityThreshold);
         }
         else
         {
-            computeShader.SetInt("_UseGrassMask", 0);
+            computeShader.SetBool("_UseDensityMap", false);
         }
 
         // Calculate thread groups needed
@@ -192,6 +204,9 @@ public class GrassRenderer : MonoBehaviour
 
     private void Update()
     {
+        // Handle Edit Mode rendering toggle
+        if (!Application.isPlaying && !renderInEditMode) return;
+
         if (needsUpdate && sourceGrassBuffer != null)
         {
             needsUpdate = false;
@@ -388,48 +403,9 @@ public class GrassRenderer : MonoBehaviour
     [ContextMenu("Regenerate Grass")]
     private void RegenerateGrass()
     {
-        if (Application.isPlaying)
-        {
-            OnDestroy();
-            InitializeBuffers();
-            DispatchComputeShader();
-        }
-    }
-
-    /// <summary>
-    /// Refreshes the grass positions. Called by the painting tool.
-    /// Works in both editor and play mode.
-    /// </summary>
-    public void RefreshGrass()
-    {
-        if (Application.isPlaying && sourceGrassBuffer != null)
-        {
-            DispatchComputeShader();
-        }
-        #if UNITY_EDITOR
-        else
-        {
-            // Mark as needing update for when play mode starts
-            needsUpdate = true;
-            UnityEditor.EditorUtility.SetDirty(this);
-        }
-        #endif
-    }
-
-    /// <summary>
-    /// Gets or sets the grass paint mask.
-    /// </summary>
-    public GrassPaintMask GrassMask
-    {
-        get => grassMask;
-        set
-        {
-            grassMask = value;
-            if (Application.isPlaying && sourceGrassBuffer != null)
-            {
-                DispatchComputeShader();
-            }
-        }
+        OnDestroy();
+        InitializeBuffers();
+        DispatchComputeShader();
     }
 
     // Gizmos for visualization in editor
