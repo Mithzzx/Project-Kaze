@@ -824,7 +824,13 @@ PlayerSettings:
   webWasm2023: 0
   webEnableSubmoduleStrippingCompatibility: 0
   scriptingDefineSymbols:
-    Standalone: ATMOSPHERIC_HEIGHT_FOG
+    Android: GRASSFLOW_SRP
+    Nintendo Switch: GRASSFLOW_SRP
+    PS4: GRASSFLOW_SRP
+    Standalone: ATMOSPHERIC_HEIGHT_FOG;GRASSFLOW_SRP
+    WebGL: GRASSFLOW_SRP
+    XboxOne: GRASSFLOW_SRP
+    iPhone: GRASSFLOW_SRP
   additionalCompilerArguments: {}
   platformArchitecture: {}
   scriptingBackend:
