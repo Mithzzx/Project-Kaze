@@ -3786,6 +3786,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6397ded32036645eda9c89eab8dedc1d, type: 3}
   m_Name: 
   m_EditorClassIdentifier: '::'
+  customGrassMesh: {fileID: 0}
   grassCount: 12006225
   terrainSize: 300
   minGrassHeight: 0.3
@@ -3819,7 +3820,7 @@ MonoBehaviour:
   occlusionBias: 0.5
   mainCamera: {fileID: 2023231877}
   renderInEditMode: 0
-  showDebugUI: 1
+  showDebugUI: 0
   densityMap: {fileID: 1371966695}
   densityThreshold: 0.1
 --- !u!4 &1153727799
