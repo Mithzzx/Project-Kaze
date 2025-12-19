@@ -8,6 +8,7 @@ using UnityEngine;
 public class GrassRenderer : MonoBehaviour
 {
     [Header("Grass Settings")]
+    [SerializeField] private Mesh customGrassMesh;
     [SerializeField] private int grassCount = 1000000; // 1 million grass blades
     [SerializeField] private float terrainSize = 100f;
     [SerializeField] private float minGrassHeight = 0.3f;
@@ -131,12 +132,26 @@ public class GrassRenderer : MonoBehaviour
             return;
         }
         // Create grass mesh
-        grassMeshLOD0 = CreateGrassBladeMesh(lod0Segments);
-        grassMeshLOD1 = CreateGrassBladeMesh(lod1Segments);
-        grassMeshLOD2 = CreateGrassBladeMesh(lod2Segments);
+        UpdateMeshes();
 
         InitializeBuffers();
         DispatchComputeShader();
+    }
+
+    private void UpdateMeshes()
+    {
+        if (customGrassMesh != null)
+        {
+            grassMeshLOD0 = customGrassMesh;
+            grassMeshLOD1 = customGrassMesh;
+            grassMeshLOD2 = customGrassMesh;
+        }
+        else
+        {
+            grassMeshLOD0 = CreateGrassBladeMesh(lod0Segments);
+            grassMeshLOD1 = CreateGrassBladeMesh(lod1Segments);
+            grassMeshLOD2 = CreateGrassBladeMesh(lod2Segments);
+        }
     }
 
     private void InitializeBuffers()
@@ -318,6 +333,7 @@ public class GrassRenderer : MonoBehaviour
         if (needsUpdate && sourceGrassBuffer != null)
         {
             needsUpdate = false;
+            UpdateMeshes();
             DispatchComputeShader();
         }
         
@@ -634,78 +650,27 @@ public class GrassRenderer : MonoBehaviour
     {
         if (!showDebugUI) return;
 
-        // Custom styles
-        GUIStyle headerStyle = new GUIStyle(GUI.skin.label) {
-            fontSize = 18,
-            fontStyle = FontStyle.Bold,
-            alignment = TextAnchor.MiddleCenter,
-            normal = { textColor = new Color(0.2f, 0.7f, 0.3f) }
-        };
-        GUIStyle sectionHeader = new GUIStyle(GUI.skin.label) {
-            fontSize = 14,
-            fontStyle = FontStyle.Bold,
-            normal = { textColor = new Color(0.3f, 0.6f, 1.0f) }
-        };
-        GUIStyle statStyle = new GUIStyle(GUI.skin.label) {
-            fontSize = 13,
-            fontStyle = FontStyle.Normal,
-            normal = { textColor = new Color(0.9f, 0.9f, 0.9f) }
-        };
-        GUIStyle errorStyle = new GUIStyle(GUI.skin.label) {
-            fontSize = 12,
-            fontStyle = FontStyle.Bold,
-            normal = { textColor = Color.red }
-        };
-        GUIStyle okStyle = new GUIStyle(GUI.skin.label) {
-            fontSize = 12,
-            fontStyle = FontStyle.Bold,
-            normal = { textColor = Color.green }
-        };
-        GUIStyle boxStyle = new GUIStyle(GUI.skin.box) {
-            padding = new RectOffset(12, 12, 12, 12),
-            margin = new RectOffset(0, 0, 0, 0),
-            normal = { background = GUI.skin.box.normal.background }
-        };
-
-        GUILayout.BeginArea(new Rect(10, 10, 370, 650), boxStyle);
-        GUILayout.Label("Grass Renderer", headerStyle);
-        GUILayout.Space(8);
-        GUILayout.Box("", GUILayout.Height(2), GUILayout.ExpandWidth(true));
-
-        GUILayout.Label("Statistics", sectionHeader);
-        GUILayout.Space(2);
-        GUILayout.BeginHorizontal();
-        GUILayout.Label($"Total Grass:", statStyle, GUILayout.Width(120));
-        GUILayout.Label($"{grassCount:N0}", statStyle);
-        GUILayout.EndHorizontal();
-        GUILayout.BeginHorizontal();
-        GUILayout.Label($"Visible LOD0:", statStyle, GUILayout.Width(120));
-        GUILayout.Label($"{visibleCountLOD0:N0}", statStyle);
-        GUILayout.EndHorizontal();
-        GUILayout.BeginHorizontal();
-        GUILayout.Label($"Visible LOD1:", statStyle, GUILayout.Width(120));
-        GUILayout.Label($"{visibleCountLOD1:N0}", statStyle);
-        GUILayout.EndHorizontal();
-        GUILayout.BeginHorizontal();
-        GUILayout.Label($"Visible LOD2:", statStyle, GUILayout.Width(120));
-        GUILayout.Label($"{visibleCountLOD2:N0}", statStyle);
-        GUILayout.EndHorizontal();
-        GUILayout.BeginHorizontal();
-        GUILayout.Label($"Total Visible:", statStyle, GUILayout.Width(120));
-        GUILayout.Label($"{visibleCountLOD0 + visibleCountLOD1 + visibleCountLOD2:N0}", statStyle);
-        GUILayout.EndHorizontal();
-
+        GUILayout.BeginArea(new Rect(10, 10, 350, 600), GUI.skin.box);
+        GUILayout.Label("Grass Renderer Debug", GUI.skin.button);
+        GUILayout.Space(5);
+        
+        GUILayout.Label($"Total Grass: {grassCount:N0}");
+        GUILayout.Label($"Visible LOD0: {visibleCountLOD0:N0}");
+        GUILayout.Label($"Visible LOD1: {visibleCountLOD1:N0}");
+        GUILayout.Label($"Visible LOD2: {visibleCountLOD2:N0}");
+        GUILayout.Label($"Total Visible: {visibleCountLOD0 + visibleCountLOD1 + visibleCountLOD2:N0}");
+        
         GUILayout.Space(10);
-        GUILayout.Box("", GUILayout.Height(2), GUILayout.ExpandWidth(true));
-        GUILayout.Label("Occlusion Culling", sectionHeader);
-        GUILayout.Space(2);
-
+        GUILayout.Label("Occlusion Culling");
+        
         if (hizComputeShader == null)
         {
-            GUILayout.Label("ERROR: HiZ Compute Shader missing!", errorStyle);
-            GUILayout.Label("Assign 'HiZGenerator' in Inspector.", errorStyle);
+            GUI.color = Color.red;
+            GUILayout.Label("ERROR: HiZ Compute Shader missing!");
+            GUILayout.Label("Assign 'HiZGenerator' in Inspector.");
+            GUI.color = Color.white;
         }
-
+        
         bool newOcclusion = GUILayout.Toggle(useOcclusionCulling, "Use Occlusion Culling");
         if (newOcclusion != useOcclusionCulling)
         {
@@ -717,31 +682,32 @@ public class GrassRenderer : MonoBehaviour
             Texture depth = Shader.GetGlobalTexture("_CameraDepthTexture");
             if (depth == null)
             {
-                GUILayout.Label("WARNING: _CameraDepthTexture is null!", errorStyle);
-                GUILayout.Label("Enable Depth Texture in URP Asset.", errorStyle);
+                GUI.color = Color.red;
+                GUILayout.Label("WARNING: _CameraDepthTexture is null!");
+                GUILayout.Label("Enable Depth Texture in URP Asset.");
+                GUI.color = Color.white;
             }
             else
             {
-                GUILayout.Label($"Depth Texture: Found ({depth.width}x{depth.height})", okStyle);
-                GUILayout.Space(2);
-                GUILayout.Label("Depth Texture Preview:", statStyle);
-                Rect rDepth = GUILayoutUtility.GetRect(320, 90);
+                GUI.color = Color.green;
+                GUILayout.Label($"Depth Texture: Found ({depth.width}x{depth.height})");
+                GUI.color = Color.white;
+                
+                // Depth Preview
+                GUILayout.Label("Depth Texture Preview:");
+                Rect rDepth = GUILayoutUtility.GetRect(300, 100);
                 GUI.DrawTexture(rDepth, depth, ScaleMode.ScaleToFit, false);
             }
-
+            
             if (hizTexture != null)
             {
-                GUILayout.Label($"HiZ Texture: {hizTexture.width}x{hizTexture.height}", okStyle);
-                GUILayout.Label("HiZ Preview (Mips):", statStyle);
-                Rect rHiz = GUILayoutUtility.GetRect(320, 120);
+                GUILayout.Label($"HiZ Texture: {hizTexture.width}x{hizTexture.height}");
+                GUILayout.Label("HiZ Preview (Mips):");
+                Rect rHiz = GUILayoutUtility.GetRect(300, 150);
                 GUI.DrawTexture(rHiz, hizTexture, ScaleMode.ScaleToFit, false);
             }
 
-            GUILayout.Space(4);
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Occlusion Bias:", statStyle, GUILayout.Width(120));
-            GUILayout.Label($"{occlusionBias:F2}", statStyle, GUILayout.Width(40));
-            GUILayout.EndHorizontal();
+            GUILayout.Label($"Bias: {occlusionBias}");
             float newBias = GUILayout.HorizontalSlider(occlusionBias, 0.0f, 1.0f);
             if (Mathf.Abs(newBias - occlusionBias) > 0.001f)
             {
@@ -749,9 +715,6 @@ public class GrassRenderer : MonoBehaviour
             }
         }
 
-        GUILayout.FlexibleSpace();
-        GUILayout.Box("", GUILayout.Height(2), GUILayout.ExpandWidth(true));
-        GUILayout.Label("© Project Kaze Grass System", new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, fontSize = 11, normal = { textColor = new Color(0.7f,0.7f,0.7f,0.7f) } });
         GUILayout.EndArea();
     }
 }
