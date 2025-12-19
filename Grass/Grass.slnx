@@ -1,6 +1,0 @@
-﻿<Solution>
-  <Project Path="Assembly-CSharp.csproj" />
-  <Project Path="Assembly-CSharp-Editor.csproj" />
-  <Project Path="GrassFlowEditor.csproj" />
-  <Project Path="GrassFlow.csproj" />
-</Solution>
