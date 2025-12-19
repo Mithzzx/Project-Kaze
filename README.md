@@ -1,13 +1,18 @@
 # 🌿 High-Performance GPU Grass System
 
-![Unity 6](https://img.shields.io/badge/Unity-6-black?style=flat-square&logo=unity)
-![URP](https://img.shields.io/badge/Render_Pipeline-URP-blue?style=flat-square)
-![Platform](https://img.shields.io/badge/Platform-PC%20%7C%20Mac%20%7C%20Consoles-lightgrey?style=flat-square)
+![Unity](https://img.shields.io/badge/Unity-6000.0+-%232b2b2b?style=flat&logo=unity&logoColor=white)
+![Instances](https://img.shields.io/badge/Instance_Count-10_Million+-brightgreen)
+![Draw Calls](https://img.shields.io/badge/Draw_Calls-3_Indirect-blue)
+![Frame Time](https://img.shields.io/badge/Frame_Time_Delta-0.1ms-orange)
+![Performance](https://img.shields.io/badge/RTX4090-700+_FPS-blueviolet)
 
-A professional, portfolio-ready GPU grass rendering system for Unity 6 (URP). Capable of rendering **1 million+ grass blades** at high frame rates using Compute Shaders, GPU Instancing, and advanced culling techniques.
+**A production-grade vegetation rendering system capable of simulating 10 million+ interactive grass blades in real-time.**
 
-![Demo Video Placeholder](demo_video_url_here)
-*(Replace with a link to a YouTube/Vimeo demo)*
+Inspired by the technical direction of *Ghost of Tsushima*, this project leverages **Indirect GPU Instancing**, **Compute Shaders**, and **Bezier-based Procedural Deformation** to achieve cinematic visuals with minimal CPU overhead.
+
+https://github.com/user-attachments/assets/055c5fd2-947a-4bbb-a6f6-5b987e34fe91
+
+https://github.com/user-attachments/assets/06014a60-49a3-4cea-8c40-7454d34aba38
 
 ---
 
@@ -17,11 +22,7 @@ A professional, portfolio-ready GPU grass rendering system for Unity 6 (URP). Ca
 **How it works:**
 Instead of using GameObjects, grass data (position, height, rotation) is generated entirely on the GPU using a **Compute Shader**. This data is stored in a `StructuredBuffer` and rendered using `DrawMeshInstancedIndirect`, bypassing the CPU overhead completely.
 *   **Organic Look:** Uses Simplex Noise for natural clumping and height variation.
-*   **Performance:** Handles 1,000,000+ instances with ease.
-
-| Feature Demo 1 | Feature Demo 2 |
-| :---: | :---: |
-| ![Instancing GIF 1](gif_url_1) | ![Instancing GIF 2](gif_url_2) |
+*   **Performance:** Handles 10,000,000+ instances with ease.
 
 ### 2. Hierarchical Z-Buffer (HiZ) Occlusion Culling
 **How it works:**
@@ -31,9 +32,7 @@ To prevent overdraw, the system implements **GPU-driven Occlusion Culling**.
 3.  It samples the HiZ texture at the correct mip level to check if the grass is hidden behind terrain or objects.
 4.  Occluded blades are discarded before they ever reach the vertex shader.
 
-| Occlusion Debug | Occlusion Result |
-| :---: | :---: |
-| ![Occlusion GIF 1](gif_url_3) | ![Occlusion GIF 2](gif_url_4) |
+
 
 ### 3. Advanced LOD & Frustum Culling
 **How it works:**
@@ -43,9 +42,9 @@ To prevent overdraw, the system implements **GPU-driven Occlusion Culling**.
     *   **LOD1:** Medium detail (3 segments)
     *   **LOD2:** Low detail (1 segment, no shadows)
 
-| Frustum Culling | LOD Transitions |
-| :---: | :---: |
-| ![Culling GIF 1](gif_url_5) | ![LOD GIF 2](gif_url_6) |
+| Frustum Culling |
+| :---: |
+| <img width="1128" height="551" alt="Screenshot 2025-12-19 at 1 52 27 PM" src="https://github.com/user-attachments/assets/c6b1cf0f-6852-4ff1-a518-2d5a7b144c83" />
 
 ### 4. Interactive Wind Simulation
 **How it works:**
@@ -65,7 +64,12 @@ Wind is simulated in the vertex shader using a **Bezier Curve** deformation tech
 
 | Density Falloff | Painting Tool |
 | :---: | :---: |
-| ![Density GIF 1](gif_url_9) | ![Painting GIF 2](gif_url_10) |
+| <img width="1128" height="728" alt="Screenshot 2025-12-19 at 1 54 09 PM" src="https://github.com/user-attachments/assets/a5f61e02-e359-45e8-9675-908aeda0e37b" /> | <img width="1128" height="728" alt="Screenshot 2025-12-19 at 1 54 19 PM" src="https://github.com/user-attachments/assets/e7f60097-fc35-4ce9-b42d-4158a841e72a" />
+ |
+
+
+
+
 
 ---
 
