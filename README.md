@@ -18,9 +18,7 @@ https://github.com/user-attachments/assets/055c5fd2-947a-4bbb-a6f6-5b987e34fe91
 
 ---
 
-## ✨ Core Features
-
-### 🖥️ 1. GPU-Driven Compute Architecture
+## ✨ GPU-Driven Compute Architecture
 **Zero CPU overhead. Everything runs on the GPU.**
 
 Instead of traditional GameObjects, the entire grass system operates on the GPU:
@@ -38,7 +36,7 @@ Graphics.DrawMeshInstancedIndirect(grassMesh, 0, material, bounds, argsBuffer);
 ```
 ---
 
-### 🎭 2. Hierarchical Z-Buffer (HiZ) Occlusion Culling
+## 🎭 Hierarchical Z-Buffer (HiZ) Occlusion Culling
 **Industry-standard AAA technique for preventing overdraw.**
 
 Implements GPU-driven occlusion culling using a depth pyramid—the same technique used in Assassin's Creed and Horizon Zero Dawn:
@@ -55,7 +53,7 @@ Implements GPU-driven occlusion culling using a depth pyramid—the same techniq
 
 ---
 
-### 🎯 3. Four-stage culling cascade eliminates unnecessary GPU work.**
+## 🎯 Four-stage culling cascade eliminates unnecessary GPU work.
 Every frame, each grass blade goes through a **GPU-side culling gauntlet**:
 
 **Stage 1: Density Map Filtering** (CSMain)
@@ -85,8 +83,7 @@ Surviving blades are appended to one of three buffers:
 
 ---
 
-### 🌊 4. Physically-Based Wind Simulation
-Wind isn't a simple rotation—it's a **mathematically accurate deformation** that preserves blade length:
+## 🌊 Physically-Based Wind Simulation
 
 **Bezier Curve Bending:**
 ```hlsl
@@ -95,9 +92,6 @@ p0 = rootPosition;                          // Fixed anchor
 p1 = rootPosition + stiffnessOffset;        // Lower curve control
 p2 = p1 + windDirection * bendFactor;       // Upper curve control  
 p3 = tipPosition + windDisplacement;        // Final tip position
-
-// Vertex position = Bezier(p0, p1, p2, p3, t)
-// where t = vertexHeight (0.0 = base, 1.0 = tip)
 ```
 
 **Multi-Frequency Wind Layers:**
@@ -115,17 +109,6 @@ p3 = tipPosition + windDisplacement;        // Final tip position
 
 ## 🚀 Performance Metrics
 
-| Metric | Traditional (GameObjects) | **GPU Grass System** | Improvement |
-|--------|--------------------------|----------------------|-------------|
-| **Grass Instances** | < 10,000 | **1,000,000** | **100× scale** |
-| **Draw Calls** | 10,000+ | **3-5** | **2,000× reduction** |
-| **CPU Time** | 35ms | **0.2ms** | **175× faster** |
-| **GPU Time** | N/A (CPU bound) | **4.5ms** | Fully GPU-driven |
-| **Memory (Grass Data)** | 1.8GB (Transforms) | **32MB** (Buffers) | **56× reduction** |
-| **FPS** | 15-25 | **60+** | **3× improvement** |
-
-### Scalability Tests
-
 | Blade Count | Draw Calls | Frame Time | FPS | Notes |
 |-------------|-----------|------------|-----|-------|
 | 100,000 | 3 | 2.1ms | 144+ | Ultra-smooth |
@@ -138,7 +121,7 @@ p3 = tipPosition + windDisplacement;        // Final tip position
 
 ---
 
-### 🌿 Advanced Shader Features
+## 🌿 Advanced Shader Features
 
 #### 🚀 Performance & Geometry
 
@@ -157,6 +140,25 @@ p3 = tipPosition + windDisplacement;        // Final tip position
 * **Tri-Tone Gradients**: 3-point vertical interpolation (Root → Mid → Tip).
 * **Hash Variation**: Per-instance color/dryness jittering using `Hash21(worldPos)`.
 * **Pipeline Ready**: Full **URP** support with synchronized ShadowCaster & DepthOnly passes.
+
+---
+
+## 🛠️ Technical Architecture
+
+```
+GrassRenderer (MonoBehaviour)
+├─ Compute Shader Pipeline
+│  ├─ CSMain Kernel         → Generate grass data (position, height, rotation)
+│  ├─ CSCull Kernel         → Frustum/Distance/Occlusion culling + LOD sorting
+│  └─ HiZ Generator         → Depth pyramid construction
+│
+├─ GPU Buffers
+│  ├─ sourceGrassBuffer     → Master data (1M blades)
+│  ├─ culledGrassBufferLOD0 → High-detail survivors (AppendStructuredBuffer)
+│  ├─ culledGrassBufferLOD1 → Mid-detail survivors
+│  ├─ culledGrassBufferLOD2 → Low-detail survivors
+│  ├─ argsBufferLOD0-2      → Indirect draw arguments
+```
 
 ---
 
