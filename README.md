@@ -159,7 +159,6 @@ GrassRenderer (MonoBehaviour)
 │  ├─ culledGrassBufferLOD2 → Low-detail survivors
 │  ├─ argsBufferLOD0-2      → Indirect draw arguments
 ```
-
 ---
 
 ## 📦 Getting Started
@@ -168,6 +167,25 @@ GrassRenderer (MonoBehaviour)
 2. Attach the `GrassRenderer` component to an empty GameObject.
 3. Assign your **Main Camera** and **Terrain** to the inspector slots.
 4. Tune the `WindMap` and `DensityMask` to fit your art direction.
+
+---
+
+## 🔗 Quick Links
+- Primary scripts: [Assets/Scripts/GrassRenderer.cs](Assets/Scripts/GrassRenderer.cs), [Assets/Shaders/GrassCompute.compute](Assets/Shaders/GrassCompute.compute), [Assets/Shaders/GrassShader.shader](Assets/Shaders/GrassShader.shader)
+- Editor tooling: [Assets/Scripts/Editor/GrassPainterEditor.cs](Assets/Scripts/Editor/GrassPainterEditor.cs), [Assets/Shaders/GrassDensityOverlay.shader](Assets/Shaders/GrassDensityOverlay.shader)
+- Documentation hub: [Documentation/Features_Overview.md](Documentation/Features_Overview.md)
+- Deep dives: [Documentation/Feature_GPU_Architecture.md](Documentation/Feature_GPU_Architecture.md) · [Documentation/Feature_HiZ_Occlusion.md](Documentation/Feature_HiZ_Occlusion.md) · [Documentation/Feature_LOD_and_Density.md](Documentation/Feature_LOD_and_Density.md) · [Documentation/Feature_Wind_and_Shading.md](Documentation/Feature_Wind_and_Shading.md) · [Documentation/Feature_Painting_and_Tools.md](Documentation/Feature_Painting_and_Tools.md) · [Documentation/Feature_Debugging_and_Troubleshooting.md](Documentation/Feature_Debugging_and_Troubleshooting.md)
+
+---
+## 📑 Resources
+
+- [Procedural Grass in 'Ghost of Tsushima](https://www.youtube.com/watch?v=Ibe1JBF5i5Y)
+- [A coder's guide to spline-based procedural geometry (Freya Holmer)](https://www.youtube.com/watch?v=o9RK6O2kOKo)
+- [Wikipedia - Phong Shading](https://en.wikipedia.org/wiki/Phong_reflection_model)
+- [CatlikeCoding - Compute Shaders](https://catlikecoding.com/unity/tutorials/basics/compute-shaders/)
+- [Ned Makes Games - Intro to Compute Shaders](https://www.youtube.com/watch?v=EB5HiqDl7VE)
+- [Ronja Tutorials - Graphics.DrawProcedural](https://www.ronja-tutorials.com/post/051-draw-procedural/)
+- [SimonDev - How do Major Video Games Render Grass?](https://www.youtube.com/watch?v=bp7REZBV4P4&t=398s)
 
 ---
 
