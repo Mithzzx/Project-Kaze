@@ -49,9 +49,10 @@ Production-ready GPU grass for Unity 6 URP. Renders 1,000,000+ blades at 60+ FPS
 
 ## Quick Links
 - Demo video placeholder: `demo_video_url_here`
-- Primary scripts: Assets/Scripts/GrassRenderer.cs, Assets/Shaders/GrassCompute.compute, Assets/Shaders/GrassShader.shader
-- Editor tooling: Assets/Scripts/Editor/GrassPainterEditor.cs, Assets/Shaders/GrassDensityOverlay.shader
-- Docs: Documentation/GrassSystem_DevLog.md, HiZ_Occlusion_Setup.md, HiZ_Troubleshooting.md
+- Primary scripts: [Assets/Scripts/GrassRenderer.cs](Assets/Scripts/GrassRenderer.cs), [Assets/Shaders/GrassCompute.compute](Assets/Shaders/GrassCompute.compute), [Assets/Shaders/GrassShader.shader](Assets/Shaders/GrassShader.shader)
+- Editor tooling: [Assets/Scripts/Editor/GrassPainterEditor.cs](Assets/Scripts/Editor/GrassPainterEditor.cs), [Assets/Shaders/GrassDensityOverlay.shader](Assets/Shaders/GrassDensityOverlay.shader)
+- Documentation hub: [Documentation/Features_Overview.md](Documentation/Features_Overview.md)
+- Deep dives: [Documentation/Feature_GPU_Architecture.md](Documentation/Feature_GPU_Architecture.md) · [Documentation/Feature_HiZ_Occlusion.md](Documentation/Feature_HiZ_Occlusion.md) · [Documentation/Feature_LOD_and_Density.md](Documentation/Feature_LOD_and_Density.md) · [Documentation/Feature_Wind_and_Shading.md](Documentation/Feature_Wind_and_Shading.md) · [Documentation/Feature_Painting_and_Tools.md](Documentation/Feature_Painting_and_Tools.md) · [Documentation/Feature_Debugging_and_Troubleshooting.md](Documentation/Feature_Debugging_and_Troubleshooting.md)
 - License: MIT
 
 ---

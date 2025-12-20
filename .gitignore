@@ -61,7 +61,6 @@ mono_crash.*.json
 
 # Ignore imported third-party caches
 Grass/Packages/~
-Grass/Packages/
 
 # Ignore imported assets folder
 Grass/Assets/Imports/
