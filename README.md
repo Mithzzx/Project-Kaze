@@ -18,7 +18,7 @@ https://github.com/user-attachments/assets/055c5fd2-947a-4bbb-a6f6-5b987e34fe91
 
 ---
 
-## ✨ GPU-Driven Compute Architecture
+## GPU-Driven Compute Architecture
 **Zero CPU overhead. Everything runs on the GPU.**
 
 Instead of traditional GameObjects, the entire grass system operates on the GPU:
@@ -36,7 +36,7 @@ Graphics.DrawMeshInstancedIndirect(grassMesh, 0, material, bounds, argsBuffer);
 ```
 ---
 
-## 🎭 Hierarchical Z-Buffer (HiZ) Occlusion Culling
+## Hierarchical Z-Buffer (HiZ) Occlusion Culling
 **Industry-standard AAA technique for preventing overdraw.**
 
 Implements GPU-driven occlusion culling using a depth pyramid—the same technique used in Assassin's Creed and Horizon Zero Dawn:
@@ -53,7 +53,7 @@ Implements GPU-driven occlusion culling using a depth pyramid—the same techniq
 
 ---
 
-## 🎯 Four-stage culling cascade eliminates unnecessary GPU work.
+## Four-stage culling cascade eliminates unnecessary GPU work.
 Every frame, each grass blade goes through a **GPU-side culling gauntlet**:
 
 **Stage 1: Density Map Filtering** (CSMain)
@@ -107,7 +107,7 @@ p3 = tipPosition + windDisplacement;        // Final tip position
 
 ---
 
-## 🚀 Performance Metrics
+## Performance Metrics
 
 | Blade Count | Draw Calls | Frame Time | FPS | Notes |
 |-------------|-----------|------------|-----|-------|
@@ -121,21 +121,21 @@ p3 = tipPosition + windDisplacement;        // Final tip position
 
 ---
 
-## 🌿 Advanced Shader Features
+## Advanced Shader Features
 
-#### 🚀 Performance & Geometry
+#### Performance & Geometry
 
 * **Procedural Mesh**: Runtime generation via C#;  FBX dependencies.
 * **Smart LOD**: Dynamic vertex stripping ( tris) based on camera distance.
 * **Custom Mesh**: Automatic override toggle for specialized foliage (wheat/flowers).
 
-#### 💡 Lighting & Optics
+#### Lighting & Optics
 
 * **Normal Rounding**: Spherical normal interpolation for 360° light wrap on flat quads.
 * **Translucency (SSS)**: View-dependent backlighting for "Golden Hour" glow effects.
 * **Vertex AO**: Zero-cost ambient occlusion baked into `uv.y` gradients.
 
-#### 🎨 Visual Fidelity
+#### Visual Fidelity
 
 * **Tri-Tone Gradients**: 3-point vertical interpolation (Root → Mid → Tip).
 * **Hash Variation**: Per-instance color/dryness jittering using `Hash21(worldPos)`.
@@ -143,7 +143,7 @@ p3 = tipPosition + windDisplacement;        // Final tip position
 
 ---
 
-## 🛠️ Technical Architecture
+## Technical Architecture
 
 ```
 GrassRenderer (MonoBehaviour)
@@ -161,7 +161,7 @@ GrassRenderer (MonoBehaviour)
 ```
 ---
 
-## 📦 Getting Started
+## Getting Started
 
 1. Ensure your project is using **Unity 6000.0+** and the **Universal Render Pipeline (URP)**.
 2. Attach the `GrassRenderer` component to an empty GameObject.
@@ -170,14 +170,14 @@ GrassRenderer (MonoBehaviour)
 
 ---
 
-## 🔗 Quick Links
+## Quick Links
 - Primary scripts: [Assets/Scripts/GrassRenderer.cs](Grass/Assets/Scripts/GrassRenderer.cs), [Assets/Shaders/GrassCompute.compute](Grass/Assets/Shaders/GrassCompute.compute), [Assets/Shaders/GrassShader.shader](Grass/Assets/Shaders/GrassShader.shader)
 - Editor tooling: [Assets/Scripts/Editor/GrassPainterEditor.cs](Grass/Assets/Scripts/Editor/GrassPainterEditor.cs), [Assets/Shaders/GrassDensityOverlay.shader](Grass/Assets/Shaders/GrassDensityOverlay.shader)
 - Documentation hub: [Documentation/Features_Overview.md](Grass/Documentation/Features_Overview.md)
 - Deep dives: [Documentation/Feature_GPU_Architecture.md](Grass/Documentation/Feature_GPU_Architecture.md) · [Documentation/Feature_HiZ_Occlusion.md](Grass/Documentation/Feature_HiZ_Occlusion.md) · [Documentation/Feature_LOD_and_Density.md](Grass/Documentation/Feature_LOD_and_Density.md) · [Documentation/Feature_Wind_and_Shading.md](Grass/Documentation/Feature_Wind_and_Shading.md) · [Documentation/Feature_Painting_and_Tools.md](Grass/Documentation/Feature_Painting_and_Tools.md) · [Documentation/Feature_Debugging_and_Troubleshooting.md](Grass/Documentation/Feature_Debugging_and_Troubleshooting.md)
 
 ---
-## 📑 Resources
+## Resources
 
 - [Procedural Grass in 'Ghost of Tsushima](https://www.youtube.com/watch?v=Ibe1JBF5i5Y)
 - [A coder's guide to spline-based procedural geometry (Freya Holmer)](https://www.youtube.com/watch?v=o9RK6O2kOKo)
